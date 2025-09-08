@@ -833,20 +833,33 @@ func getWebSocketURL(e event.Event) uint32 {
 	// Get room parameter from query string
 	room, err := h.Query().Get("room")
 	if err != nil || room == "" {
-		room = "pixelcollab" // Default room name
+		room = "pixelupdates" // Default room name
+	}
+
+	// Validate that the room name is one of our allowed channels
+	allowedChannels := map[string]bool{
+		"pixelupdates": true,
+		"chatmessages": true,
+		"userupdates":  true,
+		"pixelcollab":  true,
+	}
+
+	if !allowedChannels[room] {
+		return fail(h, fmt.Errorf("invalid room name: %s", room), 400)
 	}
 
 	// Get the pub/sub channel for real-time communication
-	_, err = pubsub.Channel("pixelcollab")
+	_, err = pubsub.Channel(room)
 	if err != nil {
-		return fail(h, fmt.Errorf("failed to get channel: %v", err), 500)
+		return fail(h, fmt.Errorf("failed to get channel %s: %v", room, err), 500)
 	}
 
 	// Return the channel name for frontend to use
 	response := map[string]interface{}{
-		"channel":  "pixelcollab",
-		"room":     room,
-		"protocol": "taubyte-pubsub",
+		"channel":       room,
+		"room":          room,
+		"protocol":      "taubyte-pubsub",
+		"websocket_url": fmt.Sprintf("ws/%s", room), // Taubyte WebSocket URL format
 	}
 
 	jsonData, err := json.Marshal(response)
