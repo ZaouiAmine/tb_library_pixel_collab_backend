@@ -712,22 +712,27 @@ func onPixelUpdate(e event.Event) uint32 {
 		return 1
 	}
 
-	// Broadcast pixel update to WebSocket clients
-	updateMsg := map[string]interface{}{
-		"type":      "pixelUpdate",
-		"payload":   pixel,
-		"timestamp": time.Now().UnixMilli(),
+	// Save pixel to database
+	if err := savePixelToDB(pixel); err != nil {
+		fmt.Printf("Error saving pixel: %v\n", err)
+		return 1
 	}
 
-	_, err = json.Marshal(updateMsg)
-	if err != nil {
-		fmt.Printf("Error marshaling pixel update: %v\n", err)
-	} else {
-		// In a real Taubyte implementation, this would broadcast to WebSocket clients
-		// For now, we'll log it and the frontend will handle it via pub/sub
-		fmt.Printf("Pixel update broadcast: x=%d, y=%d, color=%s, user=%s\n",
-			pixel.X, pixel.Y, pixel.Color, pixel.UserID)
+	// Update user stats
+	db, err := database.New("/users")
+	if err == nil {
+		userData, err := db.Get(pixel.UserID)
+		if err == nil {
+			var user User
+			if err := json.Unmarshal(userData, &user); err == nil {
+				user.PixelsPlaced++
+				user.LastSeen = time.Now().UnixMilli()
+				saveUserToDB(user)
+			}
+		}
 	}
+
+	fmt.Printf("Pixel saved: (%d,%d) by %s\n", pixel.X, pixel.Y, pixel.UserID)
 
 	return 0
 }
@@ -799,21 +804,13 @@ func onChatMessage(e event.Event) uint32 {
 		return 1
 	}
 
-	// Broadcast chat message to WebSocket clients
-	updateMsg := map[string]interface{}{
-		"type":      "chatMessage",
-		"payload":   message,
-		"timestamp": time.Now().UnixMilli(),
+	// Save message to database
+	if err := saveChatMessageToDB(message); err != nil {
+		fmt.Printf("Error saving chat message: %v\n", err)
+		return 1
 	}
 
-	_, err = json.Marshal(updateMsg)
-	if err != nil {
-		fmt.Printf("Error marshaling chat message: %v\n", err)
-	} else {
-		// In a real Taubyte implementation, this would broadcast to WebSocket clients
-		fmt.Printf("Chat message broadcast: user=%s, message=%s\n",
-			message.Username, message.Message)
-	}
+	fmt.Printf("Chat message saved: %s: %s\n", message.Username, message.Message)
 
 	return 0
 }
@@ -823,7 +820,7 @@ func onChatMessage(e event.Event) uint32 {
 // WebSocket functionality is handled by Taubyte's built-in WebSocket support
 // The pub/sub system will automatically broadcast messages to connected WebSocket clients
 
-// getWebSocketURL → Returns WebSocket URL for real-time updates
+// getWebSocketURL → Returns WebSocket configuration for Taubyte
 // Path: /api/getWebSocketURL
 //
 //export getWebSocketURL
@@ -839,11 +836,17 @@ func getWebSocketURL(e event.Event) uint32 {
 		room = "pixelcollab" // Default room name
 	}
 
-	// Return room information - frontend will construct WebSocket URL using origin
+	// Get the pub/sub channel for real-time communication
+	_, err = pubsub.Channel("pixelcollab")
+	if err != nil {
+		return fail(h, fmt.Errorf("failed to get channel: %v", err), 500)
+	}
+
+	// Return the channel name for frontend to use
 	response := map[string]interface{}{
+		"channel":  "pixelcollab",
 		"room":     room,
-		"channels": []string{"pixelupdates", "userupdates", "chatmessages"},
-		"protocol": "taubyte-websocket",
+		"protocol": "taubyte-pubsub",
 	}
 
 	jsonData, err := json.Marshal(response)
