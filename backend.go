@@ -839,15 +839,11 @@ func getWebSocketURL(e event.Event) uint32 {
 		room = "pixelcollab" // Default room name
 	}
 
-	// Get the actual WebSocket URL from Taubyte environment
-	// This should be provided by the Taubyte runtime
-	websocketURL := fmt.Sprintf("ws://localhost:9905/%s", room)
-
+	// Return room information - frontend will construct WebSocket URL using origin
 	response := map[string]interface{}{
-		"websocket_url": websocketURL,
-		"room":          room,
-		"channels":      []string{"pixelupdates", "userupdates", "chatmessages"},
-		"protocol":      "taubyte-websocket",
+		"room":     room,
+		"channels": []string{"pixelupdates", "userupdates", "chatmessages"},
+		"protocol": "taubyte-websocket",
 	}
 
 	jsonData, err := json.Marshal(response)
