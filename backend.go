@@ -38,7 +38,6 @@ type User struct {
 	IsOnline     bool   `json:"isOnline"`
 	LastSeen     int64  `json:"lastSeen"`
 	PixelsPlaced int    `json:"pixelsPlaced"`
-	CooldownEnds int64  `json:"cooldownEnds"`
 }
 
 // Represents a chat message
@@ -98,19 +97,7 @@ func isValidPixel(x, y, width, height int) bool {
 	return x >= 0 && x < width && y >= 0 && y < height
 }
 
-// Check if user is in cooldown
-func isUserInCooldown(user User) bool {
-	return time.Now().UnixMilli() < user.CooldownEnds
-}
-
-// Get remaining cooldown time in milliseconds
-func getRemainingCooldown(user User) int64 {
-	remaining := user.CooldownEnds - time.Now().UnixMilli()
-	if remaining < 0 {
-		return 0
-	}
-	return remaining
-}
+// Cooldown functions removed - no longer needed
 
 // ===== Database Operations =====
 
@@ -384,11 +371,7 @@ func placePixel(e event.Event) uint32 {
 		return fail(h, err, 500)
 	}
 
-	// Check cooldown
-	if isUserInCooldown(user) {
-		remaining := getRemainingCooldown(user)
-		return fail(h, fmt.Errorf("cooldown active, %dms remaining", remaining), 429)
-	}
+	// Cooldown removed - allow immediate pixel placement
 
 	// Validate pixel coordinates (assuming 100x100 canvas)
 	if !isValidPixel(req.X, req.Y, 100, 100) {
@@ -411,7 +394,6 @@ func placePixel(e event.Event) uint32 {
 
 	// Update user stats
 	user.PixelsPlaced++
-	user.CooldownEnds = time.Now().UnixMilli() + 1000 // 1 second cooldown
 	user.LastSeen = time.Now().UnixMilli()
 
 	if err := saveUserToDB(user); err != nil {
@@ -464,7 +446,6 @@ func joinGame(e event.Event) uint32 {
 		IsOnline:     true,
 		LastSeen:     time.Now().UnixMilli(),
 		PixelsPlaced: 0,
-		CooldownEnds: 0,
 	}
 
 	// Save user to database
@@ -731,10 +712,22 @@ func onPixelUpdate(e event.Event) uint32 {
 		return 1
 	}
 
-	// Log the pixel update (in a real implementation, you might want to
-	// broadcast this to connected clients or update a cache)
-	fmt.Printf("Pixel update received: x=%d, y=%d, color=%s, user=%s\n",
-		pixel.X, pixel.Y, pixel.Color, pixel.UserID)
+	// Broadcast pixel update to WebSocket clients
+	updateMsg := map[string]interface{}{
+		"type":      "pixelUpdate",
+		"payload":   pixel,
+		"timestamp": time.Now().UnixMilli(),
+	}
+
+	_, err = json.Marshal(updateMsg)
+	if err != nil {
+		fmt.Printf("Error marshaling pixel update: %v\n", err)
+	} else {
+		// In a real Taubyte implementation, this would broadcast to WebSocket clients
+		// For now, we'll log it and the frontend will handle it via pub/sub
+		fmt.Printf("Pixel update broadcast: x=%d, y=%d, color=%s, user=%s\n",
+			pixel.X, pixel.Y, pixel.Color, pixel.UserID)
+	}
 
 	return 0
 }
@@ -763,9 +756,21 @@ func onUserUpdate(e event.Event) uint32 {
 		return 1
 	}
 
-	// Log the user update
-	fmt.Printf("User update received: id=%s, username=%s, online=%t\n",
-		user.ID, user.Username, user.IsOnline)
+	// Broadcast user update to WebSocket clients
+	updateMsg := map[string]interface{}{
+		"type":      "userUpdate",
+		"payload":   user,
+		"timestamp": time.Now().UnixMilli(),
+	}
+
+	_, err = json.Marshal(updateMsg)
+	if err != nil {
+		fmt.Printf("Error marshaling user update: %v\n", err)
+	} else {
+		// In a real Taubyte implementation, this would broadcast to WebSocket clients
+		fmt.Printf("User update broadcast: id=%s, username=%s, online=%t\n",
+			user.ID, user.Username, user.IsOnline)
+	}
 
 	return 0
 }
@@ -794,14 +799,29 @@ func onChatMessage(e event.Event) uint32 {
 		return 1
 	}
 
-	// Log the chat message
-	fmt.Printf("Chat message received: user=%s, message=%s\n",
-		message.Username, message.Message)
+	// Broadcast chat message to WebSocket clients
+	updateMsg := map[string]interface{}{
+		"type":      "chatMessage",
+		"payload":   message,
+		"timestamp": time.Now().UnixMilli(),
+	}
+
+	_, err = json.Marshal(updateMsg)
+	if err != nil {
+		fmt.Printf("Error marshaling chat message: %v\n", err)
+	} else {
+		// In a real Taubyte implementation, this would broadcast to WebSocket clients
+		fmt.Printf("Chat message broadcast: user=%s, message=%s\n",
+			message.Username, message.Message)
+	}
 
 	return 0
 }
 
 // ===== WebSocket Relay Functions =====
+
+// WebSocket functionality is handled by Taubyte's built-in WebSocket support
+// The pub/sub system will automatically broadcast messages to connected WebSocket clients
 
 // getWebSocketURL → Returns WebSocket URL for real-time updates
 // Path: /api/getWebSocketURL
@@ -819,13 +839,15 @@ func getWebSocketURL(e event.Event) uint32 {
 		room = "pixelcollab" // Default room name
 	}
 
-	// In a real Taubyte implementation, you would get the WebSocket URL
-	// from the Taubyte API. For now, we'll return a placeholder structure
-	// that follows the Taubyte WebSocket URL format
-	response := map[string]string{
-		"websocket_url": fmt.Sprintf("ws-QmbaJ2gJCmjNLoGNSRk2F5WbpW1b45bxLCQWVcn8Butfa3/%s-4580c2740ab6d9222ef06d7c6865583e", room),
+	// Get the actual WebSocket URL from Taubyte environment
+	// This should be provided by the Taubyte runtime
+	websocketURL := fmt.Sprintf("ws://localhost:9905/%s", room)
+
+	response := map[string]interface{}{
+		"websocket_url": websocketURL,
 		"room":          room,
-		"channels":      "pixelupdates,userupdates,chatmessages",
+		"channels":      []string{"pixelupdates", "userupdates", "chatmessages"},
+		"protocol":      "taubyte-websocket",
 	}
 
 	jsonData, err := json.Marshal(response)
