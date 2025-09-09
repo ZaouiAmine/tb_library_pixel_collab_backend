@@ -436,21 +436,22 @@ func placePixel(e event.Event) uint32 {
 		Timestamp: time.Now().UnixMilli(),
 	}
 
+	// Save pixel to database
+	if err := savePixelToDB(pixel); err != nil {
+		return fail(h, err, 500)
+	}
+
 	// Update user stats
 	user.PixelsPlaced++
 	user.LastSeen = time.Now().UnixMilli()
 
-	// Publish pixel update - subscriber will handle database saving
-	if err := publishPixelUpdate(pixel); err != nil {
-		fmt.Printf("placePixel: Failed to publish pixel update: %v\n", err)
+	if err := saveUserToDB(user); err != nil {
 		return fail(h, err, 500)
 	}
 
-	// Publish user update - subscriber will handle database saving
-	if err := publishUserUpdate(user); err != nil {
-		fmt.Printf("placePixel: Failed to publish user update: %v\n", err)
-		// Don't fail the request, pixel was already published
-	}
+	// Publish updates
+	publishPixelUpdate(pixel)
+	publishUserUpdate(user)
 
 	h.Return(200)
 	return 0
@@ -742,12 +743,6 @@ func onPixelUpdate(e event.Event) uint32 {
 		return 1
 	}
 
-	// Save pixel to database
-	if err := savePixelToDB(pixel); err != nil {
-		fmt.Printf("Error saving pixel to database: %v\n", err)
-		return 1
-	}
-
 	// Update cache
 	cacheMutex.Lock()
 	if cacheValid && pixel.Y < len(canvasCache) && pixel.X < len(canvasCache[pixel.Y]) {
@@ -755,7 +750,7 @@ func onPixelUpdate(e event.Event) uint32 {
 	}
 	cacheMutex.Unlock()
 
-	fmt.Printf("Pixel saved to database and cache: (%d,%d) by %s\n", pixel.X, pixel.Y, pixel.UserID)
+	fmt.Printf("Pixel processed: (%d,%d) by %s\n", pixel.X, pixel.Y, pixel.UserID)
 	return 0
 }
 
@@ -781,14 +776,8 @@ func onUserUpdate(e event.Event) uint32 {
 		return 1
 	}
 
-	// Save user to database
-	if err := saveUserToDB(user); err != nil {
-		fmt.Printf("Error saving user to database: %v\n", err)
-		return 1
-	}
-
-	fmt.Printf("User saved to database: id=%s, username=%s, online=%t, pixels=%d\n",
-		user.ID, user.Username, user.IsOnline, user.PixelsPlaced)
+	fmt.Printf("User update: id=%s, username=%s, online=%t\n",
+		user.ID, user.Username, user.IsOnline)
 
 	return 0
 }
