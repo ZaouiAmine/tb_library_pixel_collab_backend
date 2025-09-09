@@ -1212,6 +1212,7 @@ func initCanvas(e event.Event) uint32 {
 // ===== Batch Processing (WASM Compatible) =====
 
 // Manual batch flushing functions (WASM doesn't support background goroutines)
+//
 //lint:ignore U1000 used for manual batch processing
 func flushAllBatches() {
 	pixelBatch.Flush()
@@ -1220,6 +1221,7 @@ func flushAllBatches() {
 }
 
 // Initialize batch processing (WASM compatible - no background processes)
+//
 //lint:ignore U1000 used for initialization
 func initBatchProcessor() {
 	// In WASM environment, we rely on size-based flushing only
