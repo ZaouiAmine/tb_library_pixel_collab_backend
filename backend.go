@@ -262,18 +262,24 @@ func saveUserToDB(user User) error {
 	// Create & Open the database
 	db, err := database.New("/users")
 	if err != nil {
+		fmt.Printf("saveUserToDB: Failed to create database connection: %v\n", err)
 		return err
 	}
+	fmt.Printf("saveUserToDB: Database connection created successfully\n")
 
 	userData, err := json.Marshal(user)
 	if err != nil {
+		fmt.Printf("saveUserToDB: Failed to marshal user: %v\n", err)
 		return fmt.Errorf("failed to marshal user: %v", err)
 	}
+	fmt.Printf("saveUserToDB: User data marshaled successfully\n")
 
 	err = db.Put(user.ID, userData)
 	if err != nil {
+		fmt.Printf("saveUserToDB: Failed to save user to database: %v\n", err)
 		return fmt.Errorf("failed to save user to database: %v", err)
 	}
+	fmt.Printf("saveUserToDB: User saved to database successfully\n")
 
 	return nil
 }
@@ -493,11 +499,18 @@ func joinGame(e event.Event) uint32 {
 
 	// Save user to database
 	if err := saveUserToDB(user); err != nil {
+		fmt.Printf("joinGame: Failed to save user to database: %v\n", err)
 		return fail(h, err, 500)
 	}
+	fmt.Printf("joinGame: User saved to database successfully\n")
 
 	// Publish user update
-	publishUserUpdate(user)
+	if err := publishUserUpdate(user); err != nil {
+		fmt.Printf("joinGame: Failed to publish user update: %v\n", err)
+		// Don't fail the request, user was already saved
+	} else {
+		fmt.Printf("joinGame: User update published successfully\n")
+	}
 
 	// Return user data
 	userData, err := json.Marshal(user)
