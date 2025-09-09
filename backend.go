@@ -382,6 +382,7 @@ func publishChatMessage(message ChatMessage) error {
 // ===== HTTP Handlers =====
 
 // placePixel places a pixel on the canvas
+//
 //export placePixel
 func placePixel(e event.Event) uint32 {
 	fmt.Printf("placePixel: Starting request\n")
@@ -455,6 +456,7 @@ func placePixel(e event.Event) uint32 {
 }
 
 // joinGame joins a user to the game
+//
 //export joinGame
 func joinGame(e event.Event) uint32 {
 	fmt.Printf("joinGame: Starting request\n")
@@ -510,6 +512,7 @@ func joinGame(e event.Event) uint32 {
 }
 
 // leaveGame removes a user from the game
+//
 //export leaveGame
 func leaveGame(e event.Event) uint32 {
 	h, err := e.HTTP()
@@ -551,6 +554,7 @@ func leaveGame(e event.Event) uint32 {
 }
 
 // getCanvas returns the current canvas state
+//
 //export getCanvas
 func getCanvas(e event.Event) uint32 {
 	fmt.Printf("getCanvas: Starting request\n")
@@ -586,6 +590,7 @@ func getCanvas(e event.Event) uint32 {
 }
 
 // getUsers returns the list of online users
+//
 //export getUsers
 func getUsers(e event.Event) uint32 {
 	fmt.Printf("getUsers: Starting request\n")
@@ -617,6 +622,7 @@ func getUsers(e event.Event) uint32 {
 }
 
 // sendMessage sends a chat message
+//
 //export sendMessage
 func sendMessage(e event.Event) uint32 {
 	h, err := e.HTTP()
@@ -672,6 +678,7 @@ func sendMessage(e event.Event) uint32 {
 }
 
 // getMessages returns recent chat messages
+//
 //export getMessages
 func getMessages(e event.Event) uint32 {
 	fmt.Printf("getMessages: Starting request\n")
@@ -705,6 +712,7 @@ func getMessages(e event.Event) uint32 {
 // ===== Pub/Sub Subscriber Functions =====
 
 // onPixelUpdate handles incoming pixel updates from pub/sub
+//
 //export onPixelUpdate
 func onPixelUpdate(e event.Event) uint32 {
 	ps, err := e.PubSub()
@@ -737,6 +745,7 @@ func onPixelUpdate(e event.Event) uint32 {
 }
 
 // onUserUpdate handles incoming user updates from pub/sub
+//
 //export onUserUpdate
 func onUserUpdate(e event.Event) uint32 {
 	ps, err := e.PubSub()
@@ -764,6 +773,7 @@ func onUserUpdate(e event.Event) uint32 {
 }
 
 // onChatMessage handles incoming chat messages from pub/sub
+//
 //export onChatMessage
 func onChatMessage(e event.Event) uint32 {
 	ps, err := e.PubSub()
@@ -791,6 +801,7 @@ func onChatMessage(e event.Event) uint32 {
 // ===== WebSocket Functions =====
 
 // getWebSocketURL returns WebSocket configuration for Taubyte
+//
 //export getWebSocketURL
 func getWebSocketURL(e event.Event) uint32 {
 	h, err := e.HTTP()
@@ -842,6 +853,7 @@ func getWebSocketURL(e event.Event) uint32 {
 }
 
 // initCanvas initializes canvas dimensions in database
+//
 //export initCanvas
 func initCanvas(e event.Event) uint32 {
 	h, err := e.HTTP()
