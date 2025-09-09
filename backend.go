@@ -13,18 +13,17 @@ import (
 	pubsub "github.com/taubyte/go-sdk/pubsub/node"
 )
 
-// Shared helper for errors → writes error message + returns status code
-//
-//lint:ignore U1000 this is a shared helper
-func fail(h http.Event, err error, code int) uint32 {
-	h.Write([]byte(err.Error()))
-	h.Return(code)
-	return 1
-}
+// ===== Constants =====
+const (
+	CanvasWidth  = 100
+	CanvasHeight = 100
+	MaxMessages  = 50
+	UserTimeout  = 30000 // 30 seconds in milliseconds
+)
 
 // ===== Data Structures =====
 
-// Represents a pixel on the canvas
+// Pixel represents a pixel on the canvas
 type Pixel struct {
 	X         int    `json:"x"`
 	Y         int    `json:"y"`
@@ -33,7 +32,7 @@ type Pixel struct {
 	Timestamp int64  `json:"timestamp"`
 }
 
-// Represents a user in the game
+// User represents a user in the game
 type User struct {
 	ID           string `json:"id"`
 	Username     string `json:"username"`
@@ -43,7 +42,7 @@ type User struct {
 	PixelsPlaced int    `json:"pixelsPlaced"`
 }
 
-// Represents a chat message
+// ChatMessage represents a chat message
 type ChatMessage struct {
 	ID        string `json:"id"`
 	UserID    string `json:"userId"`
@@ -53,75 +52,77 @@ type ChatMessage struct {
 	Type      string `json:"type"`
 }
 
-// Request to place a pixel
+// Request structures
 type PlacePixelRequest struct {
 	X     int    `json:"x"`
 	Y     int    `json:"y"`
 	Color string `json:"color"`
 }
 
-// Request to join the game
 type JoinGameRequest struct {
 	Username string `json:"username"`
 	UserID   string `json:"userId"`
 }
 
-// Request to send a chat message
 type ChatMessageRequest struct {
 	Message string `json:"message"`
 }
 
-// Canvas state response
+// Response structures
 type CanvasStateResponse struct {
 	Canvas [][]Pixel `json:"canvas"`
 	Width  int       `json:"width"`
 	Height int       `json:"height"`
 }
 
-// Users list response
 type UsersResponse struct {
 	Users []User `json:"users"`
 }
 
-// Chat messages response
 type ChatMessagesResponse struct {
 	Messages []ChatMessage `json:"messages"`
 }
 
-// ===== Performance Optimization Infrastructure =====
+// ===== Global State Management =====
 
-// Global database connections (connection pooling)
+// Database connections with connection pooling
 var (
-	canvasDB  database.Database
-	usersDB   database.Database
-	chatDB    database.Database
-	dbInit    sync.Once
-	batchInit sync.Once
+	canvasDB database.Database
+	usersDB  database.Database
+	chatDB   database.Database
+	dbInit   sync.Once
 )
 
-// In-memory batching for database operations
-type PixelBatch struct {
-	pixels []Pixel
-	mutex  sync.Mutex
-}
-
-type UserBatch struct {
-	users []User
-	mutex sync.Mutex
-}
-
-type MessageBatch struct {
-	messages []ChatMessage
-	mutex    sync.Mutex
-}
-
+// In-memory cache for better performance
 var (
-	pixelBatch   = &PixelBatch{}
-	userBatch    = &UserBatch{}
-	messageBatch = &MessageBatch{}
+	canvasCache     [][]Pixel
+	cacheMutex      sync.RWMutex
+	lastCacheUpdate int64
+	cacheValid      bool
 )
 
-// Initialize database connections (connection pooling)
+// ===== Utility Functions =====
+
+// fail writes error message and returns status code
+func fail(h http.Event, err error, code int) uint32 {
+	h.Write([]byte(err.Error()))
+	h.Return(code)
+	return 1
+}
+
+// generateMessageID creates a unique message ID
+func generateMessageID() string {
+	return fmt.Sprintf("msg_%d", time.Now().UnixNano())
+}
+
+// isValidPixel validates pixel coordinates
+func isValidPixel(x, y int) bool {
+	return x >= 0 && x < CanvasWidth && y >= 0 && y < CanvasHeight
+}
+
+// ===== Database Operations =====
+
+// initDatabases initializes database connections
 func initDatabases() {
 	dbInit.Do(func() {
 		var err error
@@ -144,151 +145,41 @@ func initDatabases() {
 	})
 }
 
-// Batching methods
-func (b *PixelBatch) Add(pixel Pixel) {
-	b.mutex.Lock()
-	defer b.mutex.Unlock()
-	b.pixels = append(b.pixels, pixel)
-}
-
-func (b *PixelBatch) Flush() error {
-	b.mutex.Lock()
-	defer b.mutex.Unlock()
-
-	if len(b.pixels) == 0 {
-		return nil
-	}
-
-	pixelCount := len(b.pixels)
-
-	// Save all pixels in batch
-	for _, pixel := range b.pixels {
-		if err := savePixelToDBOptimized(pixel); err != nil {
-			fmt.Printf("Error saving pixel in batch: %v\n", err)
-		}
-	}
-
-	// Clear the batch
-	b.pixels = b.pixels[:0]
-	fmt.Printf("Flushed %d pixels to database\n", pixelCount)
-	return nil
-}
-
-func (b *UserBatch) Add(user User) {
-	b.mutex.Lock()
-	defer b.mutex.Unlock()
-	b.users = append(b.users, user)
-}
-
-func (b *UserBatch) Flush() error {
-	b.mutex.Lock()
-	defer b.mutex.Unlock()
-
-	if len(b.users) == 0 {
-		return nil
-	}
-
-	userCount := len(b.users)
-
-	// Save all users in batch
-	for _, user := range b.users {
-		if err := saveUserToDBOptimized(user); err != nil {
-			fmt.Printf("Error saving user in batch: %v\n", err)
-		}
-	}
-
-	// Clear the batch
-	b.users = b.users[:0]
-	fmt.Printf("Flushed %d users to database\n", userCount)
-	return nil
-}
-
-func (b *MessageBatch) Add(message ChatMessage) {
-	b.mutex.Lock()
-	defer b.mutex.Unlock()
-	b.messages = append(b.messages, message)
-}
-
-func (b *MessageBatch) Flush() error {
-	b.mutex.Lock()
-	defer b.mutex.Unlock()
-
-	if len(b.messages) == 0 {
-		return nil
-	}
-
-	messageCount := len(b.messages)
-
-	// Save all messages in batch
-	for _, message := range b.messages {
-		if err := saveChatMessageToDBOptimized(message); err != nil {
-			fmt.Printf("Error saving message in batch: %v\n", err)
-		}
-	}
-
-	// Clear the batch
-	b.messages = b.messages[:0]
-	fmt.Printf("Flushed %d messages to database\n", messageCount)
-	return nil
-}
-
-// ===== Utility Functions =====
-
-// Generate a unique message ID
-//
-//lint:ignore U1000 used in exported functions
-func generateMessageID() string {
-	return fmt.Sprintf("msg_%d", time.Now().UnixNano())
-}
-
-// Validate pixel coordinates
-//
-//lint:ignore U1000 used in exported functions
-func isValidPixel(x, y, width, height int) bool {
-	return x >= 0 && x < width && y >= 0 && y < height
-}
-
-// Cooldown functions removed - no longer needed
-
-// ===== Database Operations =====
-
-// Get canvas from database
-//
-//lint:ignore U1000 used in exported functions
+// getCanvasFromDB retrieves canvas from database with caching
 func getCanvasFromDB() ([][]Pixel, error) {
-	initDatabases() // Ensure databases are initialized
+	initDatabases()
 
-	// Use the global canvasDB connection
-	// Note: In Taubyte, database connections are always valid once created
+	// Check cache first
+	cacheMutex.RLock()
+	if cacheValid && time.Now().UnixMilli()-lastCacheUpdate < 5000 { // 5 second cache
+		canvas := make([][]Pixel, len(canvasCache))
+		for i, row := range canvasCache {
+			canvas[i] = make([]Pixel, len(row))
+			copy(canvas[i], row)
+		}
+		cacheMutex.RUnlock()
+		return canvas, nil
+	}
+	cacheMutex.RUnlock()
 
-	// Get canvas dimensions
+	// Initialize canvas if not exists
 	widthData, err := canvasDB.Get("width")
-	var heightData []byte
 	if err != nil {
-		// Canvas not initialized, initialize it with default dimensions
-		if err := canvasDB.Put("width", []byte("100")); err != nil {
-			return nil, err
-		}
-		if err := canvasDB.Put("height", []byte("100")); err != nil {
-			return nil, err
-		}
-		widthData = []byte("100")
-		heightData = []byte("100")
-	} else {
-		heightData, err = canvasDB.Get("height")
-		if err != nil {
-			// Height not found, set default
-			if err := canvasDB.Put("height", []byte("100")); err != nil {
-				return nil, err
-			}
-			heightData = []byte("100")
-		}
+		canvasDB.Put("width", []byte(strconv.Itoa(CanvasWidth)))
+		canvasDB.Put("height", []byte(strconv.Itoa(CanvasHeight)))
+		widthData = []byte(strconv.Itoa(CanvasWidth))
+	}
+
+	heightData, err := canvasDB.Get("height")
+	if err != nil {
+		canvasDB.Put("height", []byte(strconv.Itoa(CanvasHeight)))
+		heightData = []byte(strconv.Itoa(CanvasHeight))
 	}
 
 	width, _ := strconv.Atoi(string(widthData))
 	height, _ := strconv.Atoi(string(heightData))
 
-	// Initialize empty canvas
+	// Create empty canvas
 	canvas := make([][]Pixel, height)
 	for y := 0; y < height; y++ {
 		canvas[y] = make([]Pixel, width)
@@ -313,68 +204,50 @@ func getCanvasFromDB() ([][]Pixel, error) {
 				continue
 			}
 
-			if isValidPixel(pixel.X, pixel.Y, width, height) {
+			if isValidPixel(pixel.X, pixel.Y) {
 				canvas[pixel.Y][pixel.X] = pixel
 			}
 		}
 	}
 
+	// Update cache
+	cacheMutex.Lock()
+	canvasCache = canvas
+	lastCacheUpdate = time.Now().UnixMilli()
+	cacheValid = true
+	cacheMutex.Unlock()
+
 	return canvas, nil
 }
 
-// Save pixel to database
-//
-//lint:ignore U1000 used in exported functions
+// savePixelToDB saves pixel to database and updates cache
 func savePixelToDB(pixel Pixel) error {
-	fmt.Printf("savePixelToDB: Starting to save pixel at (%d,%d)\n", pixel.X, pixel.Y)
-
-	initDatabases() // Ensure databases are initialized
-
-	// Use the global canvasDB connection
-	// Note: In Taubyte, database connections are always valid once created
+	initDatabases()
 
 	pixelData, err := json.Marshal(pixel)
 	if err != nil {
-		fmt.Printf("savePixelToDB: Failed to marshal pixel data: %v\n", err)
 		return err
 	}
 
 	key := fmt.Sprintf("pixels/%d_%d", pixel.X, pixel.Y)
-	fmt.Printf("savePixelToDB: Saving pixel with key: %s\n", key)
-
 	err = canvasDB.Put(key, pixelData)
 	if err != nil {
-		fmt.Printf("savePixelToDB: Failed to save pixel to database: %v\n", err)
 		return err
 	}
 
-	fmt.Printf("savePixelToDB: Pixel saved successfully\n")
+	// Update cache
+	cacheMutex.Lock()
+	if cacheValid && pixel.Y < len(canvasCache) && pixel.X < len(canvasCache[pixel.Y]) {
+		canvasCache[pixel.Y][pixel.X] = pixel
+	}
+	cacheMutex.Unlock()
+
 	return nil
 }
 
-// Optimized version using connection pool
-//
-//lint:ignore U1000 used in batching functions
-func savePixelToDBOptimized(pixel Pixel) error {
-	initDatabases() // Ensure databases are initialized
-
-	pixelData, err := json.Marshal(pixel)
-	if err != nil {
-		return err
-	}
-
-	key := fmt.Sprintf("pixels/%d_%d", pixel.X, pixel.Y)
-	return canvasDB.Put(key, pixelData)
-}
-
-// Get users from database
-//
-//lint:ignore U1000 used in exported functions
+// getUsersFromDB retrieves users from database
 func getUsersFromDB() ([]User, error) {
-	initDatabases() // Ensure databases are initialized
-
-	// Use the global usersDB connection
-	// Note: In Taubyte, database connections are always valid once created
+	initDatabases()
 
 	keys, err := usersDB.List("")
 	if err != nil {
@@ -382,6 +255,8 @@ func getUsersFromDB() ([]User, error) {
 	}
 
 	var users []User
+	now := time.Now().UnixMilli()
+
 	for _, key := range keys {
 		userData, err := usersDB.Get(key)
 		if err != nil {
@@ -393,51 +268,17 @@ func getUsersFromDB() ([]User, error) {
 			continue
 		}
 
-		// Check if user is still online (within last 30 seconds)
-		if time.Now().UnixMilli()-user.LastSeen < 30000 {
-			user.IsOnline = true
-		} else {
-			user.IsOnline = false
-		}
-
+		// Update online status
+		user.IsOnline = (now - user.LastSeen) < UserTimeout
 		users = append(users, user)
 	}
 
 	return users, nil
 }
 
-// Save user to database
-//
-//lint:ignore U1000 used in exported functions
+// saveUserToDB saves user to database
 func saveUserToDB(user User) error {
-	fmt.Printf("saveUserToDB: Starting to save user: %s\n", user.ID)
-
-	initDatabases() // Ensure databases are initialized
-
-	// Use the global usersDB connection
-	// Note: In Taubyte, database connections are always valid once created
-
-	userData, err := json.Marshal(user)
-	if err != nil {
-		fmt.Printf("saveUserToDB: Failed to marshal user data: %v\n", err)
-		return err
-	}
-
-	err = usersDB.Put(user.ID, userData)
-	if err != nil {
-		fmt.Printf("saveUserToDB: Failed to save user to database: %v\n", err)
-		return err
-	}
-
-	fmt.Printf("saveUserToDB: User saved successfully\n")
-	return nil
-}
-
-// Optimized version using connection pool
-//
-//lint:ignore U1000 used in batching functions
-func saveUserToDBOptimized(user User) error {
-	initDatabases() // Ensure databases are initialized
+	initDatabases()
 
 	userData, err := json.Marshal(user)
 	if err != nil {
@@ -447,14 +288,9 @@ func saveUserToDBOptimized(user User) error {
 	return usersDB.Put(user.ID, userData)
 }
 
-// Get chat messages from database
-//
-//lint:ignore U1000 used in exported functions
+// getChatMessagesFromDB retrieves chat messages from database
 func getChatMessagesFromDB() ([]ChatMessage, error) {
-	initDatabases() // Ensure databases are initialized
-
-	// Use the global chatDB connection
-	// Note: In Taubyte, database connections are always valid once created
+	initDatabases()
 
 	keys, err := chatDB.List("")
 	if err != nil {
@@ -476,31 +312,17 @@ func getChatMessagesFromDB() ([]ChatMessage, error) {
 		messages = append(messages, message)
 	}
 
+	// Sort by timestamp and limit
+	if len(messages) > MaxMessages {
+		messages = messages[len(messages)-MaxMessages:]
+	}
+
 	return messages, nil
 }
 
-// Save chat message to database
-//
-//lint:ignore U1000 used in exported functions
+// saveChatMessageToDB saves chat message to database
 func saveChatMessageToDB(message ChatMessage) error {
-	initDatabases() // Ensure databases are initialized
-
-	// Use the global chatDB connection
-	// Note: In Taubyte, database connections are always valid once created
-
-	messageData, err := json.Marshal(message)
-	if err != nil {
-		return err
-	}
-
-	return chatDB.Put(message.ID, messageData)
-}
-
-// Optimized version using connection pool
-//
-//lint:ignore U1000 used in batching functions
-func saveChatMessageToDBOptimized(message ChatMessage) error {
-	initDatabases() // Ensure databases are initialized
+	initDatabases()
 
 	messageData, err := json.Marshal(message)
 	if err != nil {
@@ -512,9 +334,7 @@ func saveChatMessageToDBOptimized(message ChatMessage) error {
 
 // ===== Pub/Sub Functions =====
 
-// Publish pixel update
-//
-//lint:ignore U1000 used in exported functions
+// publishPixelUpdate publishes pixel update
 func publishPixelUpdate(pixel Pixel) error {
 	channel, err := pubsub.Channel("pixelupdates")
 	if err != nil {
@@ -529,9 +349,7 @@ func publishPixelUpdate(pixel Pixel) error {
 	return channel.Publish(pixelData)
 }
 
-// Publish user update
-//
-//lint:ignore U1000 used in exported functions
+// publishUserUpdate publishes user update
 func publishUserUpdate(user User) error {
 	channel, err := pubsub.Channel("userupdates")
 	if err != nil {
@@ -546,9 +364,7 @@ func publishUserUpdate(user User) error {
 	return channel.Publish(userData)
 }
 
-// Publish chat message
-//
-//lint:ignore U1000 used in exported functions
+// publishChatMessage publishes chat message
 func publishChatMessage(message ChatMessage) error {
 	channel, err := pubsub.Channel("chatmessages")
 	if err != nil {
@@ -563,18 +379,14 @@ func publishChatMessage(message ChatMessage) error {
 	return channel.Publish(messageData)
 }
 
-// ===== Exported Functions (HTTP Handlers) =====
+// ===== HTTP Handlers =====
 
-// placePixel → Places a pixel on the canvas
-// Path: /api/placePixel
-//
+// placePixel places a pixel on the canvas
 //export placePixel
 func placePixel(e event.Event) uint32 {
-	fmt.Printf("placePixel: Starting pixel placement request\n")
+	fmt.Printf("placePixel: Starting request\n")
 
-	// Initialize databases and batch processor on first call
 	initDatabases()
-	initBatchProcessor()
 
 	h, err := e.HTTP()
 	if err != nil {
@@ -585,41 +397,31 @@ func placePixel(e event.Event) uint32 {
 	// Get user ID from headers
 	userID, err := h.Headers().Get("X-User-ID")
 	if err != nil || userID == "" {
-		fmt.Printf("placePixel: User ID missing or invalid: %v\n", err)
 		return fail(h, fmt.Errorf("user ID required"), 401)
 	}
-	fmt.Printf("placePixel: User ID: %s\n", userID)
 
 	// Decode request body
 	var req PlacePixelRequest
 	dec := json.NewDecoder(h.Body())
 	defer h.Body().Close()
 	if err = dec.Decode(&req); err != nil {
-		fmt.Printf("placePixel: Failed to decode request body: %v\n", err)
 		return fail(h, err, 400)
 	}
-	fmt.Printf("placePixel: Request - X:%d, Y:%d, Color:%s\n", req.X, req.Y, req.Color)
+
+	// Validate coordinates
+	if !isValidPixel(req.X, req.Y) {
+		return fail(h, fmt.Errorf("invalid coordinates"), 400)
+	}
 
 	// Get user from database
 	userData, err := usersDB.Get(userID)
 	if err != nil {
-		fmt.Printf("placePixel: User not found in database: %s, error: %v\n", userID, err)
 		return fail(h, fmt.Errorf("user not found"), 404)
 	}
 
 	var user User
 	if err := json.Unmarshal(userData, &user); err != nil {
-		fmt.Printf("placePixel: Failed to unmarshal user data: %v\n", err)
 		return fail(h, err, 500)
-	}
-	fmt.Printf("placePixel: User found - ID:%s, Username:%s, PixelsPlaced:%d\n", user.ID, user.Username, user.PixelsPlaced)
-
-	// Cooldown removed - allow immediate pixel placement
-
-	// Validate pixel coordinates (assuming 100x100 canvas)
-	if !isValidPixel(req.X, req.Y, 100, 100) {
-		fmt.Printf("placePixel: Invalid coordinates - X:%d, Y:%d\n", req.X, req.Y)
-		return fail(h, fmt.Errorf("invalid coordinates"), 400)
 	}
 
 	// Create pixel
@@ -633,70 +435,47 @@ func placePixel(e event.Event) uint32 {
 
 	// Save pixel to database
 	if err := savePixelToDB(pixel); err != nil {
-		fmt.Printf("placePixel: Failed to save pixel to database: %v\n", err)
 		return fail(h, err, 500)
 	}
-	fmt.Printf("placePixel: Pixel saved successfully\n")
 
 	// Update user stats
 	user.PixelsPlaced++
 	user.LastSeen = time.Now().UnixMilli()
 
 	if err := saveUserToDB(user); err != nil {
-		fmt.Printf("placePixel: Failed to save user to database: %v\n", err)
 		return fail(h, err, 500)
 	}
-	fmt.Printf("placePixel: User stats updated successfully\n")
 
-	// Publish pixel update
-	if err := publishPixelUpdate(pixel); err != nil {
-		// Log error but don't fail the request
-		fmt.Printf("placePixel: Failed to publish pixel update: %v\n", err)
-	} else {
-		fmt.Printf("placePixel: Pixel update published successfully\n")
-	}
+	// Publish updates
+	publishPixelUpdate(pixel)
+	publishUserUpdate(user)
 
-	// Publish user update
-	if err := publishUserUpdate(user); err != nil {
-		fmt.Printf("placePixel: Failed to publish user update: %v\n", err)
-	} else {
-		fmt.Printf("placePixel: User update published successfully\n")
-	}
-
-	fmt.Printf("placePixel: Request completed successfully\n")
 	h.Return(200)
 	return 0
 }
 
-// joinGame → Joins a user to the game
-// Path: /api/joinGame
-//
+// joinGame joins a user to the game
 //export joinGame
 func joinGame(e event.Event) uint32 {
-	fmt.Printf("joinGame: Starting join game request\n")
+	fmt.Printf("joinGame: Starting request\n")
+
+	initDatabases()
 
 	h, err := e.HTTP()
 	if err != nil {
-		fmt.Printf("joinGame: Failed to get HTTP event: %v\n", err)
 		return 1
 	}
-
-	// Initialize databases
-	initDatabases()
 
 	// Decode request body
 	var req JoinGameRequest
 	dec := json.NewDecoder(h.Body())
 	defer h.Body().Close()
 	if err = dec.Decode(&req); err != nil {
-		fmt.Printf("joinGame: Failed to decode request body: %v\n", err)
 		return fail(h, err, 400)
 	}
-	fmt.Printf("joinGame: Request - Username:%s, UserID:%s\n", req.Username, req.UserID)
 
 	// Validate input
 	if req.Username == "" || req.UserID == "" {
-		fmt.Printf("joinGame: Invalid input - Username:%s, UserID:%s\n", req.Username, req.UserID)
 		return fail(h, fmt.Errorf("username and user ID required"), 400)
 	}
 
@@ -704,44 +483,33 @@ func joinGame(e event.Event) uint32 {
 	user := User{
 		ID:           req.UserID,
 		Username:     req.Username,
-		Color:        fmt.Sprintf("#%06x", time.Now().UnixNano()%16777216), // Random color
+		Color:        fmt.Sprintf("#%06x", time.Now().UnixNano()%16777216),
 		IsOnline:     true,
 		LastSeen:     time.Now().UnixMilli(),
 		PixelsPlaced: 0,
 	}
-	fmt.Printf("joinGame: Created user - ID:%s, Username:%s, Color:%s\n", user.ID, user.Username, user.Color)
 
 	// Save user to database
 	if err := saveUserToDB(user); err != nil {
-		fmt.Printf("joinGame: Failed to save user to database: %v\n", err)
 		return fail(h, err, 500)
 	}
-	fmt.Printf("joinGame: User saved to database successfully\n")
 
 	// Publish user update
-	if err := publishUserUpdate(user); err != nil {
-		fmt.Printf("joinGame: Failed to publish user update: %v\n", err)
-	} else {
-		fmt.Printf("joinGame: User update published successfully\n")
-	}
+	publishUserUpdate(user)
 
 	// Return user data
 	userData, err := json.Marshal(user)
 	if err != nil {
-		fmt.Printf("joinGame: Failed to marshal user data: %v\n", err)
 		return fail(h, err, 500)
 	}
 
 	h.Headers().Set("Content-Type", "application/json")
 	h.Write(userData)
-	fmt.Printf("joinGame: Request completed successfully\n")
 	h.Return(200)
 	return 0
 }
 
-// leaveGame → Removes a user from the game
-// Path: /api/leaveGame
-//
+// leaveGame removes a user from the game
 //export leaveGame
 func leaveGame(e event.Event) uint32 {
 	h, err := e.HTTP()
@@ -776,78 +544,60 @@ func leaveGame(e event.Event) uint32 {
 	}
 
 	// Publish user update
-	if err := publishUserUpdate(user); err != nil {
-		fmt.Printf("Failed to publish user update: %v\n", err)
-	}
+	publishUserUpdate(user)
 
 	h.Return(200)
 	return 0
 }
 
-// getCanvas → Returns the current canvas state
-// Path: /api/getCanvas
-//
+// getCanvas returns the current canvas state
 //export getCanvas
 func getCanvas(e event.Event) uint32 {
-	fmt.Printf("getCanvas: Starting canvas request\n")
+	fmt.Printf("getCanvas: Starting request\n")
 
 	h, err := e.HTTP()
 	if err != nil {
-		fmt.Printf("getCanvas: Failed to get HTTP event: %v\n", err)
 		return 1
 	}
-
-	// Initialize databases
-	initDatabases()
 
 	// Get canvas from database
 	canvas, err := getCanvasFromDB()
 	if err != nil {
-		fmt.Printf("getCanvas: Failed to get canvas from database: %v\n", err)
 		return fail(h, err, 500)
 	}
 
 	// Create response
 	response := CanvasStateResponse{
 		Canvas: canvas,
-		Width:  100,
-		Height: 100,
+		Width:  CanvasWidth,
+		Height: CanvasHeight,
 	}
 
 	// Encode and send response
 	jsonData, err := json.Marshal(response)
 	if err != nil {
-		fmt.Printf("getCanvas: Failed to marshal response: %v\n", err)
 		return fail(h, err, 500)
 	}
 
 	h.Headers().Set("Content-Type", "application/json")
 	h.Write(jsonData)
-	fmt.Printf("getCanvas: Canvas request completed successfully\n")
 	h.Return(200)
 	return 0
 }
 
-// getUsers → Returns the list of online users
-// Path: /api/getUsers
-//
+// getUsers returns the list of online users
 //export getUsers
 func getUsers(e event.Event) uint32 {
-	fmt.Printf("getUsers: Starting users request\n")
+	fmt.Printf("getUsers: Starting request\n")
 
 	h, err := e.HTTP()
 	if err != nil {
-		fmt.Printf("getUsers: Failed to get HTTP event: %v\n", err)
 		return 1
 	}
-
-	// Initialize databases
-	initDatabases()
 
 	// Get users from database
 	users, err := getUsersFromDB()
 	if err != nil {
-		fmt.Printf("getUsers: Failed to get users from database: %v\n", err)
 		return fail(h, err, 500)
 	}
 
@@ -857,20 +607,16 @@ func getUsers(e event.Event) uint32 {
 	// Encode and send response
 	jsonData, err := json.Marshal(response)
 	if err != nil {
-		fmt.Printf("getUsers: Failed to marshal response: %v\n", err)
 		return fail(h, err, 500)
 	}
 
 	h.Headers().Set("Content-Type", "application/json")
 	h.Write(jsonData)
-	fmt.Printf("getUsers: Users request completed successfully\n")
 	h.Return(200)
 	return 0
 }
 
-// sendMessage → Sends a chat message
-// Path: /api/sendMessage
-//
+// sendMessage sends a chat message
 //export sendMessage
 func sendMessage(e event.Event) uint32 {
 	h, err := e.HTTP()
@@ -919,40 +665,26 @@ func sendMessage(e event.Event) uint32 {
 	}
 
 	// Publish chat message
-	if err := publishChatMessage(message); err != nil {
-		fmt.Printf("Failed to publish chat message: %v\n", err)
-	}
+	publishChatMessage(message)
 
 	h.Return(200)
 	return 0
 }
 
-// getMessages → Returns recent chat messages
-// Path: /api/getMessages
-//
+// getMessages returns recent chat messages
 //export getMessages
 func getMessages(e event.Event) uint32 {
-	fmt.Printf("getMessages: Starting messages request\n")
+	fmt.Printf("getMessages: Starting request\n")
 
 	h, err := e.HTTP()
 	if err != nil {
-		fmt.Printf("getMessages: Failed to get HTTP event: %v\n", err)
 		return 1
 	}
-
-	// Initialize databases
-	initDatabases()
 
 	// Get messages from database
 	messages, err := getChatMessagesFromDB()
 	if err != nil {
-		fmt.Printf("getMessages: Failed to get messages from database: %v\n", err)
 		return fail(h, err, 500)
-	}
-
-	// Limit to last 50 messages
-	if len(messages) > 50 {
-		messages = messages[len(messages)-50:]
 	}
 
 	// Create response
@@ -961,31 +693,26 @@ func getMessages(e event.Event) uint32 {
 	// Encode and send response
 	jsonData, err := json.Marshal(response)
 	if err != nil {
-		fmt.Printf("getMessages: Failed to marshal response: %v\n", err)
 		return fail(h, err, 500)
 	}
 
 	h.Headers().Set("Content-Type", "application/json")
 	h.Write(jsonData)
-	fmt.Printf("getMessages: Messages request completed successfully\n")
 	h.Return(200)
 	return 0
 }
 
 // ===== Pub/Sub Subscriber Functions =====
 
-// onPixelUpdate → Handles incoming pixel updates from pub/sub (OPTIMIZED)
-//
+// onPixelUpdate handles incoming pixel updates from pub/sub
 //export onPixelUpdate
 func onPixelUpdate(e event.Event) uint32 {
-	// Get the pubsub event
 	ps, err := e.PubSub()
 	if err != nil {
 		fmt.Printf("Error getting pubsub event: %v\n", err)
 		return 1
 	}
 
-	// Get the pixel data from the pub/sub message
 	data, err := ps.Data()
 	if err != nil {
 		fmt.Printf("Error getting pixel update data: %v\n", err)
@@ -998,57 +725,26 @@ func onPixelUpdate(e event.Event) uint32 {
 		return 1
 	}
 
-	// Process synchronously (WASM doesn't support goroutines)
-	// Add pixel to batch for efficient processing
-	pixelBatch.Add(pixel)
-
-	// Flush batch if it reaches a certain size
-	pixelBatch.mutex.Lock()
-	batchSize := len(pixelBatch.pixels)
-	pixelBatch.mutex.Unlock()
-
-	if batchSize >= 10 {
-		pixelBatch.Flush()
+	// Update cache
+	cacheMutex.Lock()
+	if cacheValid && pixel.Y < len(canvasCache) && pixel.X < len(canvasCache[pixel.Y]) {
+		canvasCache[pixel.Y][pixel.X] = pixel
 	}
-
-	// Update user stats
-	initDatabases()
-	userData, err := usersDB.Get(pixel.UserID)
-	if err == nil {
-		var user User
-		if err := json.Unmarshal(userData, &user); err == nil {
-			user.PixelsPlaced++
-			user.LastSeen = time.Now().UnixMilli()
-			userBatch.Add(user)
-
-			// Flush user batch if needed
-			userBatch.mutex.Lock()
-			userBatchSize := len(userBatch.users)
-			userBatch.mutex.Unlock()
-
-			if userBatchSize >= 5 {
-				userBatch.Flush()
-			}
-		}
-	}
+	cacheMutex.Unlock()
 
 	fmt.Printf("Pixel processed: (%d,%d) by %s\n", pixel.X, pixel.Y, pixel.UserID)
-
 	return 0
 }
 
-// onUserUpdate → Handles incoming user updates from pub/sub
-//
+// onUserUpdate handles incoming user updates from pub/sub
 //export onUserUpdate
 func onUserUpdate(e event.Event) uint32 {
-	// Get the pubsub event
 	ps, err := e.PubSub()
 	if err != nil {
 		fmt.Printf("Error getting pubsub event: %v\n", err)
 		return 1
 	}
 
-	// Get the user data from the pub/sub message
 	data, err := ps.Data()
 	if err != nil {
 		fmt.Printf("Error getting user update data: %v\n", err)
@@ -1061,37 +757,21 @@ func onUserUpdate(e event.Event) uint32 {
 		return 1
 	}
 
-	// Broadcast user update to WebSocket clients
-	updateMsg := map[string]interface{}{
-		"type":      "userUpdate",
-		"payload":   user,
-		"timestamp": time.Now().UnixMilli(),
-	}
-
-	_, err = json.Marshal(updateMsg)
-	if err != nil {
-		fmt.Printf("Error marshaling user update: %v\n", err)
-	} else {
-		// In a real Taubyte implementation, this would broadcast to WebSocket clients
-		fmt.Printf("User update broadcast: id=%s, username=%s, online=%t\n",
-			user.ID, user.Username, user.IsOnline)
-	}
+	fmt.Printf("User update: id=%s, username=%s, online=%t\n",
+		user.ID, user.Username, user.IsOnline)
 
 	return 0
 }
 
-// onChatMessage → Handles incoming chat messages from pub/sub (OPTIMIZED)
-//
+// onChatMessage handles incoming chat messages from pub/sub
 //export onChatMessage
 func onChatMessage(e event.Event) uint32 {
-	// Get the pubsub event
 	ps, err := e.PubSub()
 	if err != nil {
 		fmt.Printf("Error getting pubsub event: %v\n", err)
 		return 1
 	}
 
-	// Get the message data from the pub/sub message
 	data, err := ps.Data()
 	if err != nil {
 		fmt.Printf("Error getting chat message data: %v\n", err)
@@ -1104,32 +784,13 @@ func onChatMessage(e event.Event) uint32 {
 		return 1
 	}
 
-	// Process synchronously (WASM doesn't support goroutines)
-	// Add message to batch for efficient processing
-	messageBatch.Add(message)
-
-	// Flush batch if it reaches a certain size
-	messageBatch.mutex.Lock()
-	batchSize := len(messageBatch.messages)
-	messageBatch.mutex.Unlock()
-
-	if batchSize >= 20 {
-		messageBatch.Flush()
-	}
-
-	fmt.Printf("Chat message processed: %s: %s\n", message.Username, message.Message)
-
+	fmt.Printf("Chat message: %s: %s\n", message.Username, message.Message)
 	return 0
 }
 
-// ===== WebSocket Relay Functions =====
+// ===== WebSocket Functions =====
 
-// WebSocket functionality is handled by Taubyte's built-in WebSocket support
-// The pub/sub system will automatically broadcast messages to connected WebSocket clients
-
-// getWebSocketURL → Returns WebSocket configuration for Taubyte
-// Path: /api/getWebSocketURL
-//
+// getWebSocketURL returns WebSocket configuration for Taubyte
 //export getWebSocketURL
 func getWebSocketURL(e event.Event) uint32 {
 	h, err := e.HTTP()
@@ -1140,10 +801,10 @@ func getWebSocketURL(e event.Event) uint32 {
 	// Get room parameter from query string
 	room, err := h.Query().Get("room")
 	if err != nil || room == "" {
-		room = "pixelupdates" // Default room name
+		room = "pixelupdates"
 	}
 
-	// Validate that the room name is one of our allowed channels
+	// Validate room name
 	allowedChannels := map[string]bool{
 		"pixelupdates": true,
 		"chatmessages": true,
@@ -1155,18 +816,18 @@ func getWebSocketURL(e event.Event) uint32 {
 		return fail(h, fmt.Errorf("invalid room name: %s", room), 400)
 	}
 
-	// Get the pub/sub channel for real-time communication
+	// Get the pub/sub channel
 	_, err = pubsub.Channel(room)
 	if err != nil {
 		return fail(h, fmt.Errorf("failed to get channel %s: %v", room, err), 500)
 	}
 
-	// Return the channel name for frontend to use
+	// Return the channel configuration
 	response := map[string]interface{}{
 		"channel":       room,
 		"room":          room,
 		"protocol":      "taubyte-pubsub",
-		"websocket_url": fmt.Sprintf("ws/%s", room), // Taubyte WebSocket URL format
+		"websocket_url": fmt.Sprintf("ws/%s", room),
 	}
 
 	jsonData, err := json.Marshal(response)
@@ -1180,9 +841,7 @@ func getWebSocketURL(e event.Event) uint32 {
 	return 0
 }
 
-// initCanvas → Initializes canvas dimensions in database
-// Path: /api/initCanvas
-//
+// initCanvas initializes canvas dimensions in database
 //export initCanvas
 func initCanvas(e event.Event) uint32 {
 	h, err := e.HTTP()
@@ -1190,24 +849,20 @@ func initCanvas(e event.Event) uint32 {
 		return 1
 	}
 
-	// Initialize canvas database with default dimensions
-	db, err := database.New("/canvas")
-	if err != nil {
-		return fail(h, err, 500)
-	}
+	initDatabases()
 
 	// Set canvas dimensions
-	if err := db.Put("width", []byte("100")); err != nil {
+	if err := canvasDB.Put("width", []byte(strconv.Itoa(CanvasWidth))); err != nil {
 		return fail(h, err, 500)
 	}
-	if err := db.Put("height", []byte("100")); err != nil {
+	if err := canvasDB.Put("height", []byte(strconv.Itoa(CanvasHeight))); err != nil {
 		return fail(h, err, 500)
 	}
 
 	response := map[string]string{
 		"status": "Canvas initialized",
-		"width":  "100",
-		"height": "100",
+		"width":  strconv.Itoa(CanvasWidth),
+		"height": strconv.Itoa(CanvasHeight),
 	}
 
 	jsonData, err := json.Marshal(response)
@@ -1219,24 +874,4 @@ func initCanvas(e event.Event) uint32 {
 	h.Write(jsonData)
 	h.Return(200)
 	return 0
-}
-
-// ===== Batch Processing (WASM Compatible) =====
-
-// Manual batch flushing functions (WASM doesn't support background goroutines)
-//
-//lint:ignore U1000 used for manual batch processing
-func flushAllBatches() {
-	pixelBatch.Flush()
-	userBatch.Flush()
-	messageBatch.Flush()
-}
-
-// Initialize batch processing (WASM compatible - no background processes)
-//
-//lint:ignore U1000 used for initialization
-func initBatchProcessor() {
-	// In WASM environment, we rely on size-based flushing only
-	// No background processes are supported
-	fmt.Printf("Batch processing initialized (WASM compatible)\n")
 }
