@@ -913,17 +913,23 @@ func getWebSocketURL(e event.Event) uint32 {
 	}
 
 	// Get the pub/sub channel
-	_, err = pubsub.Channel(room)
+	channel, err := pubsub.Channel(room)
 	if err != nil {
 		return fail(h, fmt.Errorf("failed to get channel %s: %v", room, err), 500)
 	}
 
-	// Return the channel configuration
+	// Get the actual WebSocket URL from Taubyte
+	wsURL, err := channel.WebSocket().Url()
+	if err != nil {
+		return fail(h, fmt.Errorf("failed to get WebSocket URL for %s: %v", room, err), 500)
+	}
+
+	// Return the channel configuration with the actual WebSocket URL
 	response := map[string]interface{}{
 		"channel":       room,
 		"room":          room,
 		"protocol":      "taubyte-pubsub",
-		"websocket_url": fmt.Sprintf("ws/%s", room),
+		"websocket_url": wsURL.Path,
 	}
 
 	jsonData, err := json.Marshal(response)
