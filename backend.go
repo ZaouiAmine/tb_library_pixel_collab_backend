@@ -3,7 +3,6 @@ package lib
 import (
 	"encoding/json"
 	"fmt"
-	"strconv"
 	"sync"
 	"time"
 
@@ -15,10 +14,11 @@ import (
 
 // ===== Constants =====
 const (
-	CanvasWidth  = 100
-	CanvasHeight = 100
-	MaxMessages  = 50
-	UserTimeout  = 30000 // 30 seconds in milliseconds
+	CanvasWidth      = 100
+	CanvasHeight     = 100
+	MaxMessages      = 100
+	UserTimeout      = 30000 // 30 seconds in milliseconds
+	MaxPixelsPerUser = 1000
 )
 
 // ===== Data Structures =====
@@ -29,6 +29,7 @@ type Pixel struct {
 	Y         int    `json:"y"`
 	Color     string `json:"color"`
 	UserID    string `json:"userId"`
+	Username  string `json:"username"`
 	Timestamp int64  `json:"timestamp"`
 }
 
@@ -68,163 +69,104 @@ type ChatMessageRequest struct {
 	Message string `json:"message"`
 }
 
-// Response structures
-type CanvasStateResponse struct {
-	Canvas [][]Pixel `json:"canvas"`
-	Width  int       `json:"width"`
-	Height int       `json:"height"`
-}
-
-type UsersResponse struct {
-	Users []User `json:"users"`
-}
-
-type ChatMessagesResponse struct {
-	Messages []ChatMessage `json:"messages"`
-}
-
-// ===== Global State Management =====
-
-// In-memory cache for better performance
+// ===== Global State =====
 var (
-	canvasCache     [][]Pixel
-	cacheMutex      sync.RWMutex
-	lastCacheUpdate int64
-	cacheValid      bool
+	canvasCache [][]Pixel
+	cacheMutex  sync.RWMutex
+	cacheValid  bool
 )
 
 // ===== Utility Functions =====
 
-// fail writes error message and returns status code
 func fail(h http.Event, err error, code int) uint32 {
 	h.Write([]byte(err.Error()))
 	h.Return(code)
 	return 1
 }
 
-// generateMessageID creates a unique message ID
-func generateMessageID() string {
-	return fmt.Sprintf("msg_%d", time.Now().UnixNano())
-}
-
-// isValidPixel validates pixel coordinates
 func isValidPixel(x, y int) bool {
 	return x >= 0 && x < CanvasWidth && y >= 0 && y < CanvasHeight
 }
 
-// ===== Database Operations =====
-
-// getCanvasFromDB retrieves canvas from database with caching
-func getCanvasFromDB() ([][]Pixel, error) {
-	// Check cache first
-	cacheMutex.RLock()
-	if cacheValid && time.Now().UnixMilli()-lastCacheUpdate < 5000 { // 5 second cache
-		canvas := make([][]Pixel, len(canvasCache))
-		for i, row := range canvasCache {
-			canvas[i] = make([]Pixel, len(row))
-			copy(canvas[i], row)
-		}
-		cacheMutex.RUnlock()
-		return canvas, nil
-	}
-	cacheMutex.RUnlock()
-
-	// Create & Open the database
-	db, err := database.New("/canvas")
-	if err != nil {
-		return nil, err
-	}
-
-	// Initialize canvas if not exists
-	widthData, err := db.Get("width")
-	if err != nil {
-		db.Put("width", []byte(strconv.Itoa(CanvasWidth)))
-		db.Put("height", []byte(strconv.Itoa(CanvasHeight)))
-		widthData = []byte(strconv.Itoa(CanvasWidth))
-	}
-
-	heightData, err := db.Get("height")
-	if err != nil {
-		db.Put("height", []byte(strconv.Itoa(CanvasHeight)))
-		heightData = []byte(strconv.Itoa(CanvasHeight))
-	}
-
-	width, _ := strconv.Atoi(string(widthData))
-	height, _ := strconv.Atoi(string(heightData))
-
-	// Create empty canvas
-	canvas := make([][]Pixel, height)
-	for y := 0; y < height; y++ {
-		canvas[y] = make([]Pixel, width)
-		for x := 0; x < width; x++ {
-			canvas[y][x] = Pixel{
-				X: x, Y: y, Color: "#ffffff", UserID: "", Timestamp: 0,
-			}
-		}
-	}
-
-	// Load existing pixels
-	keys, err := db.List("pixels/")
-	if err == nil {
-		for _, key := range keys {
-			pixelData, err := db.Get(key)
-			if err != nil {
-				continue
-			}
-
-			var pixel Pixel
-			if err := json.Unmarshal(pixelData, &pixel); err != nil {
-				continue
-			}
-
-			if isValidPixel(pixel.X, pixel.Y) {
-				canvas[pixel.Y][pixel.X] = pixel
-			}
-		}
-	}
-
-	// Update cache
-	cacheMutex.Lock()
-	canvasCache = canvas
-	lastCacheUpdate = time.Now().UnixMilli()
-	cacheValid = true
-	cacheMutex.Unlock()
-
-	return canvas, nil
+func generateMessageID() string {
+	return fmt.Sprintf("msg_%d_%d", time.Now().UnixMilli(), time.Now().UnixNano()%1000000)
 }
 
-// savePixelToDB saves pixel to database and updates cache
-func savePixelToDB(pixel Pixel) error {
-	// Create & Open the database
+// ===== Database Operations =====
+
+func initCanvas() error {
 	db, err := database.New("/canvas")
 	if err != nil {
 		return err
 	}
 
-	pixelData, err := json.Marshal(pixel)
+	// Initialize empty canvas
+	canvas := make([][]Pixel, CanvasHeight)
+	for y := range canvas {
+		canvas[y] = make([]Pixel, CanvasWidth)
+	}
+
+	canvasData, err := json.Marshal(canvas)
 	if err != nil {
-		return fmt.Errorf("failed to marshal pixel: %v", err)
+		return err
 	}
 
-	key := fmt.Sprintf("pixels/%d_%d", pixel.X, pixel.Y)
-	err = db.Put(key, pixelData)
-	if err != nil {
-		return fmt.Errorf("failed to save pixel to database: %v", err)
-	}
-
-	// Update cache
-	cacheMutex.Lock()
-	if cacheValid && pixel.Y < len(canvasCache) && pixel.X < len(canvasCache[pixel.Y]) {
-		canvasCache[pixel.Y][pixel.X] = pixel
-	}
-	cacheMutex.Unlock()
-
-	return nil
+	return db.Put("canvas", canvasData)
 }
 
-// getUsersFromDB retrieves users from database
+func getCanvasFromDB() ([][]Pixel, error) {
+	db, err := database.New("/canvas")
+	if err != nil {
+		return nil, err
+	}
+
+	data, err := db.Get("canvas")
+	if err != nil {
+		// Initialize canvas if it doesn't exist
+		if err := initCanvas(); err != nil {
+			return nil, err
+		}
+		data, err = db.Get("canvas")
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	var canvas [][]Pixel
+	if err := json.Unmarshal(data, &canvas); err != nil {
+		return nil, err
+	}
+
+	return canvas, nil
+}
+
+func savePixelToDB(pixel Pixel) error {
+	db, err := database.New("/canvas")
+	if err != nil {
+		return err
+	}
+
+	// Get current canvas
+	canvas, err := getCanvasFromDB()
+	if err != nil {
+		return err
+	}
+
+	// Update pixel
+	if pixel.Y < len(canvas) && pixel.X < len(canvas[pixel.Y]) {
+		canvas[pixel.Y][pixel.X] = pixel
+	}
+
+	// Save back to database
+	canvasData, err := json.Marshal(canvas)
+	if err != nil {
+		return err
+	}
+
+	return db.Put("canvas", canvasData)
+}
+
 func getUsersFromDB() ([]User, error) {
-	// Create & Open the database
 	db, err := database.New("/users")
 	if err != nil {
 		return nil, err
@@ -249,17 +191,16 @@ func getUsersFromDB() ([]User, error) {
 			continue
 		}
 
-		// Update online status
-		user.IsOnline = (now - user.LastSeen) < UserTimeout
-		users = append(users, user)
+		// Filter out offline users
+		if (now - user.LastSeen) <= UserTimeout {
+			users = append(users, user)
+		}
 	}
 
 	return users, nil
 }
 
-// saveUserToDB saves user to database
 func saveUserToDB(user User) error {
-	// Create & Open the database
 	db, err := database.New("/users")
 	if err != nil {
 		return err
@@ -267,20 +208,13 @@ func saveUserToDB(user User) error {
 
 	userData, err := json.Marshal(user)
 	if err != nil {
-		return fmt.Errorf("failed to marshal user: %v", err)
+		return err
 	}
 
-	err = db.Put(user.ID, userData)
-	if err != nil {
-		return fmt.Errorf("failed to save user to database: %v", err)
-	}
-
-	return nil
+	return db.Put(user.ID, userData)
 }
 
-// getChatMessagesFromDB retrieves chat messages from database
 func getChatMessagesFromDB() ([]ChatMessage, error) {
-	// Create & Open the database
 	db, err := database.New("/chat")
 	if err != nil {
 		return nil, err
@@ -306,17 +240,15 @@ func getChatMessagesFromDB() ([]ChatMessage, error) {
 		messages = append(messages, message)
 	}
 
-	// Sort by timestamp and limit
+	// Sort by timestamp (newest first) and limit
 	if len(messages) > MaxMessages {
-		messages = messages[len(messages)-MaxMessages:]
+		messages = messages[:MaxMessages]
 	}
 
 	return messages, nil
 }
 
-// saveChatMessageToDB saves chat message to database
 func saveChatMessageToDB(message ChatMessage) error {
-	// Create & Open the database
 	db, err := database.New("/chat")
 	if err != nil {
 		return err
@@ -330,9 +262,8 @@ func saveChatMessageToDB(message ChatMessage) error {
 	return db.Put(message.ID, messageData)
 }
 
-// ===== Pub/Sub Functions =====
+// ===== Pub/Sub Operations =====
 
-// publishPixelUpdate publishes pixel update
 func publishPixelUpdate(pixel Pixel) error {
 	channel, err := pubsub.Channel("pixelupdates")
 	if err != nil {
@@ -347,7 +278,6 @@ func publishPixelUpdate(pixel Pixel) error {
 	return channel.Publish(pixelData)
 }
 
-// publishUserUpdate publishes user update
 func publishUserUpdate(user User) error {
 	channel, err := pubsub.Channel("userupdates")
 	if err != nil {
@@ -362,7 +292,6 @@ func publishUserUpdate(user User) error {
 	return channel.Publish(userData)
 }
 
-// publishChatMessage publishes chat message
 func publishChatMessage(message ChatMessage) error {
 	channel, err := pubsub.Channel("chatmessages")
 	if err != nil {
@@ -379,301 +308,67 @@ func publishChatMessage(message ChatMessage) error {
 
 // ===== HTTP Handlers =====
 
-// placePixel places a pixel on the canvas
-//
-//export placePixel
-func placePixel(e event.Event) uint32 {
-	fmt.Printf("placePixel: Starting request\n")
-
-	h, err := e.HTTP()
-	if err != nil {
-		fmt.Printf("placePixel: Failed to get HTTP event: %v\n", err)
-		return 1
-	}
-
-	// Get user ID from headers
-	userID, err := h.Headers().Get("X-User-ID")
-	if err != nil || userID == "" {
-		return fail(h, fmt.Errorf("user ID required"), 401)
-	}
-
-	// Decode request body
-	var req PlacePixelRequest
-	dec := json.NewDecoder(h.Body())
-	defer h.Body().Close()
-	if err = dec.Decode(&req); err != nil {
-		return fail(h, err, 400)
-	}
-
-	// Validate coordinates
-	if !isValidPixel(req.X, req.Y) {
-		return fail(h, fmt.Errorf("invalid coordinates"), 400)
-	}
-
-	// Get user from database
-	db, err := database.New("/users")
-	if err != nil {
-		return fail(h, err, 500)
-	}
-
-	userData, err := db.Get(userID)
-	if err != nil {
-		fmt.Printf("placePixel: User not found in database: %s, error: %v\n", userID, err)
-		return fail(h, fmt.Errorf("user not found"), 404)
-	}
-
-	var user User
-	if err := json.Unmarshal(userData, &user); err != nil {
-		return fail(h, err, 500)
-	}
-
-	// Create pixel
-	pixel := Pixel{
-		X:         req.X,
-		Y:         req.Y,
-		Color:     req.Color,
-		UserID:    userID,
-		Timestamp: time.Now().UnixMilli(),
-	}
-
-	// Publish pixel update - subscriber will handle database operations
-	if err := publishPixelUpdate(pixel); err != nil {
-		fmt.Printf("placePixel: Failed to publish pixel update: %v\n", err)
-		return fail(h, err, 500)
-	}
-
-	fmt.Printf("placePixel: Pixel published successfully: (%d,%d) by %s\n", pixel.X, pixel.Y, pixel.UserID)
-
-	h.Return(200)
-	return 0
-}
-
-// joinGame joins a user to the game
-//
-//export joinGame
-func joinGame(e event.Event) uint32 {
-	fmt.Printf("joinGame: Starting request\n")
-
-	h, err := e.HTTP()
-	if err != nil {
-		return 1
-	}
-
-	// Decode request body
-	var req JoinGameRequest
-	dec := json.NewDecoder(h.Body())
-	defer h.Body().Close()
-	if err = dec.Decode(&req); err != nil {
-		return fail(h, err, 400)
-	}
-
-	// Validate input
-	if req.Username == "" || req.UserID == "" {
-		return fail(h, fmt.Errorf("username and user ID required"), 400)
-	}
-
-	// Create user
-	user := User{
-		ID:           req.UserID,
-		Username:     req.Username,
-		Color:        fmt.Sprintf("#%06x", time.Now().UnixNano()%16777216),
-		IsOnline:     true,
-		LastSeen:     time.Now().UnixMilli(),
-		PixelsPlaced: 0,
-	}
-
-	// Publish user update - subscriber will handle database operations
-	if err := publishUserUpdate(user); err != nil {
-		fmt.Printf("joinGame: Failed to publish user update: %v\n", err)
-		return fail(h, err, 500)
-	}
-
-	fmt.Printf("joinGame: User published successfully: %s (%s)\n", user.Username, user.ID)
-
-	// Return user data
-	userData, err := json.Marshal(user)
-	if err != nil {
-		return fail(h, err, 500)
-	}
-
-	h.Headers().Set("Content-Type", "application/json")
-	h.Write(userData)
-	h.Return(200)
-	return 0
-}
-
-// leaveGame removes a user from the game
-//
-//export leaveGame
-func leaveGame(e event.Event) uint32 {
-	h, err := e.HTTP()
-	if err != nil {
-		return 1
-	}
-
-	// Get user ID from headers
-	userID, err := h.Headers().Get("X-User-ID")
-	if err != nil || userID == "" {
-		return fail(h, fmt.Errorf("user ID required"), 401)
-	}
-
-	// Get user from database
-	db, err := database.New("/users")
-	if err != nil {
-		return fail(h, err, 500)
-	}
-
-	userData, err := db.Get(userID)
-	if err != nil {
-		return fail(h, fmt.Errorf("user not found"), 404)
-	}
-
-	var user User
-	if err := json.Unmarshal(userData, &user); err != nil {
-		return fail(h, err, 500)
-	}
-
-	// Mark user as offline
-	user.IsOnline = false
-	user.LastSeen = time.Now().UnixMilli()
-
-	// Save user to database
-	if err := saveUserToDB(user); err != nil {
-		return fail(h, err, 500)
-	}
-
-	// Publish user update
-	publishUserUpdate(user)
-
-	h.Return(200)
-	return 0
-}
-
 // getCanvas returns the current canvas state
 //
 //export getCanvas
 func getCanvas(e event.Event) uint32 {
-	fmt.Printf("getCanvas: Starting request\n")
-
 	h, err := e.HTTP()
 	if err != nil {
 		return 1
 	}
 
-	// Get canvas from database
+	// Try cache first
+	cacheMutex.RLock()
+	if cacheValid && len(canvasCache) > 0 {
+		canvasData, err := json.Marshal(canvasCache)
+		cacheMutex.RUnlock()
+		if err == nil {
+			h.Headers().Set("Content-Type", "application/json")
+			h.Write(canvasData)
+			h.Return(200)
+			return 0
+		}
+	}
+	cacheMutex.RUnlock()
+
+	// Fallback to database
 	canvas, err := getCanvasFromDB()
 	if err != nil {
 		return fail(h, err, 500)
 	}
 
-	// Create response
-	response := CanvasStateResponse{
-		Canvas: canvas,
-		Width:  CanvasWidth,
-		Height: CanvasHeight,
-	}
-
-	// Encode and send response
-	jsonData, err := json.Marshal(response)
+	canvasData, err := json.Marshal(canvas)
 	if err != nil {
 		return fail(h, err, 500)
 	}
 
 	h.Headers().Set("Content-Type", "application/json")
-	h.Write(jsonData)
+	h.Write(canvasData)
 	h.Return(200)
 	return 0
 }
 
-// getUsers returns the list of online users
+// getUsers returns online users
 //
 //export getUsers
 func getUsers(e event.Event) uint32 {
-	fmt.Printf("getUsers: Starting request\n")
-
 	h, err := e.HTTP()
 	if err != nil {
 		return 1
 	}
 
-	// Get users from database
 	users, err := getUsersFromDB()
 	if err != nil {
 		return fail(h, err, 500)
 	}
 
-	// Create response
-	response := UsersResponse{Users: users}
-
-	// Encode and send response
-	jsonData, err := json.Marshal(response)
+	usersData, err := json.Marshal(users)
 	if err != nil {
 		return fail(h, err, 500)
 	}
 
 	h.Headers().Set("Content-Type", "application/json")
-	h.Write(jsonData)
-	h.Return(200)
-	return 0
-}
-
-// sendMessage sends a chat message
-//
-//export sendMessage
-func sendMessage(e event.Event) uint32 {
-	h, err := e.HTTP()
-	if err != nil {
-		return 1
-	}
-
-	// Get user ID from headers
-	userID, err := h.Headers().Get("X-User-ID")
-	if err != nil || userID == "" {
-		return fail(h, fmt.Errorf("user ID required"), 401)
-	}
-
-	// Decode request body
-	var req ChatMessageRequest
-	dec := json.NewDecoder(h.Body())
-	defer h.Body().Close()
-	if err = dec.Decode(&req); err != nil {
-		return fail(h, err, 400)
-	}
-
-	// Get user from database
-	db, err := database.New("/users")
-	if err != nil {
-		return fail(h, err, 500)
-	}
-
-	userData, err := db.Get(userID)
-	if err != nil {
-		return fail(h, fmt.Errorf("user not found"), 404)
-	}
-
-	var user User
-	if err := json.Unmarshal(userData, &user); err != nil {
-		return fail(h, err, 500)
-	}
-
-	// Create chat message
-	message := ChatMessage{
-		ID:        generateMessageID(),
-		UserID:    userID,
-		Username:  user.Username,
-		Message:   req.Message,
-		Timestamp: time.Now().UnixMilli(),
-		Type:      "user",
-	}
-
-	// Publish chat message - subscriber will handle database operations
-	if err := publishChatMessage(message); err != nil {
-		fmt.Printf("sendMessage: Failed to publish chat message: %v\n", err)
-		return fail(h, err, 500)
-	}
-
-	fmt.Printf("sendMessage: Chat message published successfully: %s: %s\n", message.Username, message.Message)
-
+	h.Write(usersData)
 	h.Return(200)
 	return 0
 }
@@ -682,23 +377,73 @@ func sendMessage(e event.Event) uint32 {
 //
 //export getMessages
 func getMessages(e event.Event) uint32 {
-	fmt.Printf("getMessages: Starting request\n")
-
 	h, err := e.HTTP()
 	if err != nil {
 		return 1
 	}
 
-	// Get messages from database
 	messages, err := getChatMessagesFromDB()
 	if err != nil {
 		return fail(h, err, 500)
 	}
 
-	// Create response
-	response := ChatMessagesResponse{Messages: messages}
+	messagesData, err := json.Marshal(messages)
+	if err != nil {
+		return fail(h, err, 500)
+	}
 
-	// Encode and send response
+	h.Headers().Set("Content-Type", "application/json")
+	h.Write(messagesData)
+	h.Return(200)
+	return 0
+}
+
+// getWebSocketURL returns WebSocket configuration for Taubyte
+//
+//export getWebSocketURL
+func getWebSocketURL(e event.Event) uint32 {
+	h, err := e.HTTP()
+	if err != nil {
+		return 1
+	}
+
+	// Get room parameter from query string
+	room, err := h.Query().Get("room")
+	if err != nil || room == "" {
+		room = "pixelupdates"
+	}
+
+	// Validate room name
+	allowedChannels := map[string]bool{
+		"pixelupdates": true,
+		"chatmessages": true,
+		"userupdates":  true,
+	}
+
+	if !allowedChannels[room] {
+		return fail(h, fmt.Errorf("invalid room name: %s", room), 400)
+	}
+
+	// Get the pub/sub channel
+	channel, err := pubsub.Channel(room)
+	if err != nil {
+		return fail(h, fmt.Errorf("failed to get channel %s: %v", room, err), 500)
+	}
+
+	// Get the actual WebSocket URL from Taubyte
+	wsURL, err := channel.WebSocket().Url()
+	if err != nil {
+		return fail(h, fmt.Errorf("failed to get WebSocket URL for %s: %v", room, err), 500)
+	}
+
+	// Return the channel configuration with the actual WebSocket URL
+	response := map[string]interface{}{
+		"channel":       room,
+		"room":          room,
+		"protocol":      "taubyte-pubsub",
+		"websocket_url": wsURL.Path,
+	}
+
 	jsonData, err := json.Marshal(response)
 	if err != nil {
 		return fail(h, err, 500)
@@ -710,7 +455,24 @@ func getMessages(e event.Event) uint32 {
 	return 0
 }
 
-// ===== Pub/Sub Subscriber Functions =====
+// initCanvasHandler initializes canvas dimensions in database
+//
+//export initCanvas
+func initCanvasHandler(e event.Event) uint32 {
+	h, err := e.HTTP()
+	if err != nil {
+		return 1
+	}
+
+	if err := initCanvas(); err != nil {
+		return fail(h, err, 500)
+	}
+
+	h.Return(200)
+	return 0
+}
+
+// ===== Pub/Sub Subscribers (Background Processing) =====
 
 // onPixelUpdate handles incoming pixel updates from pub/sub
 //
@@ -766,6 +528,15 @@ func onPixelUpdate(e event.Event) uint32 {
 		return 1
 	}
 
+	// Check pixel limit
+	if user.PixelsPlaced >= MaxPixelsPerUser {
+		fmt.Printf("User %s has reached pixel limit\n", pixel.UserID)
+		return 1
+	}
+
+	// Add username to pixel
+	pixel.Username = user.Username
+
 	// Save pixel to database
 	if err := savePixelToDB(pixel); err != nil {
 		fmt.Printf("Error saving pixel to database: %v\n", err)
@@ -782,6 +553,13 @@ func onPixelUpdate(e event.Event) uint32 {
 
 	// Update cache
 	cacheMutex.Lock()
+	if !cacheValid {
+		canvas, err := getCanvasFromDB()
+		if err == nil {
+			canvasCache = canvas
+			cacheValid = true
+		}
+	}
 	if cacheValid && pixel.Y < len(canvasCache) && pixel.X < len(canvasCache[pixel.Y]) {
 		canvasCache[pixel.Y][pixel.X] = pixel
 	}
@@ -880,105 +658,5 @@ func onChatMessage(e event.Event) uint32 {
 	}
 
 	fmt.Printf("Chat message validated and saved: %s: %s\n", message.Username, message.Message)
-	return 0
-}
-
-// ===== WebSocket Functions =====
-
-// getWebSocketURL returns WebSocket configuration for Taubyte
-//
-//export getWebSocketURL
-func getWebSocketURL(e event.Event) uint32 {
-	h, err := e.HTTP()
-	if err != nil {
-		return 1
-	}
-
-	// Get room parameter from query string
-	room, err := h.Query().Get("room")
-	if err != nil || room == "" {
-		room = "pixelupdates"
-	}
-
-	// Validate room name
-	allowedChannels := map[string]bool{
-		"pixelupdates": true,
-		"chatmessages": true,
-		"userupdates":  true,
-		"pixelcollab":  true,
-	}
-
-	if !allowedChannels[room] {
-		return fail(h, fmt.Errorf("invalid room name: %s", room), 400)
-	}
-
-	// Get the pub/sub channel
-	channel, err := pubsub.Channel(room)
-	if err != nil {
-		return fail(h, fmt.Errorf("failed to get channel %s: %v", room, err), 500)
-	}
-
-	// Get the actual WebSocket URL from Taubyte
-	wsURL, err := channel.WebSocket().Url()
-	if err != nil {
-		return fail(h, fmt.Errorf("failed to get WebSocket URL for %s: %v", room, err), 500)
-	}
-
-	// Return the channel configuration with the actual WebSocket URL
-	response := map[string]interface{}{
-		"channel":       room,
-		"room":          room,
-		"protocol":      "taubyte-pubsub",
-		"websocket_url": wsURL.Path,
-	}
-
-	jsonData, err := json.Marshal(response)
-	if err != nil {
-		return fail(h, err, 500)
-	}
-
-	h.Headers().Set("Content-Type", "application/json")
-	h.Write(jsonData)
-	h.Return(200)
-	return 0
-}
-
-// initCanvas initializes canvas dimensions in database
-//
-//export initCanvas
-func initCanvas(e event.Event) uint32 {
-	h, err := e.HTTP()
-	if err != nil {
-		return 1
-	}
-
-	// Create & Open the database
-	db, err := database.New("/canvas")
-	if err != nil {
-		return fail(h, err, 500)
-	}
-
-	// Set canvas dimensions
-	if err := db.Put("width", []byte(strconv.Itoa(CanvasWidth))); err != nil {
-		return fail(h, err, 500)
-	}
-	if err := db.Put("height", []byte(strconv.Itoa(CanvasHeight))); err != nil {
-		return fail(h, err, 500)
-	}
-
-	response := map[string]string{
-		"status": "Canvas initialized",
-		"width":  strconv.Itoa(CanvasWidth),
-		"height": strconv.Itoa(CanvasHeight),
-	}
-
-	jsonData, err := json.Marshal(response)
-	if err != nil {
-		return fail(h, err, 500)
-	}
-
-	h.Headers().Set("Content-Type", "application/json")
-	h.Write(jsonData)
-	h.Return(200)
 	return 0
 }
