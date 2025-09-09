@@ -256,29 +256,29 @@ func isValidPixel(x, y, width, height int) bool {
 //
 //lint:ignore U1000 used in exported functions
 func getCanvasFromDB() ([][]Pixel, error) {
-	db, err := database.New("/canvas")
-	if err != nil {
-		return nil, err
-	}
+	initDatabases() // Ensure databases are initialized
+
+	// Use the global canvasDB connection
+	// Note: In Taubyte, database connections are always valid once created
 
 	// Get canvas dimensions
-	widthData, err := db.Get("width")
+	widthData, err := canvasDB.Get("width")
 	var heightData []byte
 	if err != nil {
 		// Canvas not initialized, initialize it with default dimensions
-		if err := db.Put("width", []byte("100")); err != nil {
+		if err := canvasDB.Put("width", []byte("100")); err != nil {
 			return nil, err
 		}
-		if err := db.Put("height", []byte("100")); err != nil {
+		if err := canvasDB.Put("height", []byte("100")); err != nil {
 			return nil, err
 		}
 		widthData = []byte("100")
 		heightData = []byte("100")
 	} else {
-		heightData, err = db.Get("height")
+		heightData, err = canvasDB.Get("height")
 		if err != nil {
 			// Height not found, set default
-			if err := db.Put("height", []byte("100")); err != nil {
+			if err := canvasDB.Put("height", []byte("100")); err != nil {
 				return nil, err
 			}
 			heightData = []byte("100")
@@ -300,10 +300,10 @@ func getCanvasFromDB() ([][]Pixel, error) {
 	}
 
 	// Load existing pixels
-	keys, err := db.List("pixels/")
+	keys, err := canvasDB.List("pixels/")
 	if err == nil {
 		for _, key := range keys {
-			pixelData, err := db.Get(key)
+			pixelData, err := canvasDB.Get(key)
 			if err != nil {
 				continue
 			}
@@ -328,11 +328,10 @@ func getCanvasFromDB() ([][]Pixel, error) {
 func savePixelToDB(pixel Pixel) error {
 	fmt.Printf("savePixelToDB: Starting to save pixel at (%d,%d)\n", pixel.X, pixel.Y)
 
-	db, err := database.New("/canvas")
-	if err != nil {
-		fmt.Printf("savePixelToDB: Failed to connect to canvas database: %v\n", err)
-		return err
-	}
+	initDatabases() // Ensure databases are initialized
+
+	// Use the global canvasDB connection
+	// Note: In Taubyte, database connections are always valid once created
 
 	pixelData, err := json.Marshal(pixel)
 	if err != nil {
@@ -343,7 +342,7 @@ func savePixelToDB(pixel Pixel) error {
 	key := fmt.Sprintf("pixels/%d_%d", pixel.X, pixel.Y)
 	fmt.Printf("savePixelToDB: Saving pixel with key: %s\n", key)
 
-	err = db.Put(key, pixelData)
+	err = canvasDB.Put(key, pixelData)
 	if err != nil {
 		fmt.Printf("savePixelToDB: Failed to save pixel to database: %v\n", err)
 		return err
@@ -372,19 +371,19 @@ func savePixelToDBOptimized(pixel Pixel) error {
 //
 //lint:ignore U1000 used in exported functions
 func getUsersFromDB() ([]User, error) {
-	db, err := database.New("/users")
-	if err != nil {
-		return nil, err
-	}
+	initDatabases() // Ensure databases are initialized
 
-	keys, err := db.List("")
+	// Use the global usersDB connection
+	// Note: In Taubyte, database connections are always valid once created
+
+	keys, err := usersDB.List("")
 	if err != nil {
 		return []User{}, nil
 	}
 
 	var users []User
 	for _, key := range keys {
-		userData, err := db.Get(key)
+		userData, err := usersDB.Get(key)
 		if err != nil {
 			continue
 		}
@@ -413,11 +412,10 @@ func getUsersFromDB() ([]User, error) {
 func saveUserToDB(user User) error {
 	fmt.Printf("saveUserToDB: Starting to save user: %s\n", user.ID)
 
-	db, err := database.New("/users")
-	if err != nil {
-		fmt.Printf("saveUserToDB: Failed to connect to users database: %v\n", err)
-		return err
-	}
+	initDatabases() // Ensure databases are initialized
+
+	// Use the global usersDB connection
+	// Note: In Taubyte, database connections are always valid once created
 
 	userData, err := json.Marshal(user)
 	if err != nil {
@@ -425,7 +423,7 @@ func saveUserToDB(user User) error {
 		return err
 	}
 
-	err = db.Put(user.ID, userData)
+	err = usersDB.Put(user.ID, userData)
 	if err != nil {
 		fmt.Printf("saveUserToDB: Failed to save user to database: %v\n", err)
 		return err
@@ -453,19 +451,19 @@ func saveUserToDBOptimized(user User) error {
 //
 //lint:ignore U1000 used in exported functions
 func getChatMessagesFromDB() ([]ChatMessage, error) {
-	db, err := database.New("/chat")
-	if err != nil {
-		return nil, err
-	}
+	initDatabases() // Ensure databases are initialized
 
-	keys, err := db.List("")
+	// Use the global chatDB connection
+	// Note: In Taubyte, database connections are always valid once created
+
+	keys, err := chatDB.List("")
 	if err != nil {
 		return []ChatMessage{}, nil
 	}
 
 	var messages []ChatMessage
 	for _, key := range keys {
-		messageData, err := db.Get(key)
+		messageData, err := chatDB.Get(key)
 		if err != nil {
 			continue
 		}
@@ -485,17 +483,17 @@ func getChatMessagesFromDB() ([]ChatMessage, error) {
 //
 //lint:ignore U1000 used in exported functions
 func saveChatMessageToDB(message ChatMessage) error {
-	db, err := database.New("/chat")
-	if err != nil {
-		return err
-	}
+	initDatabases() // Ensure databases are initialized
+
+	// Use the global chatDB connection
+	// Note: In Taubyte, database connections are always valid once created
 
 	messageData, err := json.Marshal(message)
 	if err != nil {
 		return err
 	}
 
-	return db.Put(message.ID, messageData)
+	return chatDB.Put(message.ID, messageData)
 }
 
 // Optimized version using connection pool
@@ -603,13 +601,7 @@ func placePixel(e event.Event) uint32 {
 	fmt.Printf("placePixel: Request - X:%d, Y:%d, Color:%s\n", req.X, req.Y, req.Color)
 
 	// Get user from database
-	db, err := database.New("/users")
-	if err != nil {
-		fmt.Printf("placePixel: Failed to connect to users database: %v\n", err)
-		return fail(h, err, 500)
-	}
-
-	userData, err := db.Get(userID)
+	userData, err := usersDB.Get(userID)
 	if err != nil {
 		fmt.Printf("placePixel: User not found in database: %s, error: %v\n", userID, err)
 		return fail(h, fmt.Errorf("user not found"), 404)
@@ -689,6 +681,9 @@ func joinGame(e event.Event) uint32 {
 		return 1
 	}
 
+	// Initialize databases
+	initDatabases()
+
 	// Decode request body
 	var req JoinGameRequest
 	dec := json.NewDecoder(h.Body())
@@ -761,12 +756,7 @@ func leaveGame(e event.Event) uint32 {
 	}
 
 	// Get user from database
-	db, err := database.New("/users")
-	if err != nil {
-		return fail(h, err, 500)
-	}
-
-	userData, err := db.Get(userID)
+	userData, err := usersDB.Get(userID)
 	if err != nil {
 		return fail(h, fmt.Errorf("user not found"), 404)
 	}
@@ -799,14 +789,21 @@ func leaveGame(e event.Event) uint32 {
 //
 //export getCanvas
 func getCanvas(e event.Event) uint32 {
+	fmt.Printf("getCanvas: Starting canvas request\n")
+
 	h, err := e.HTTP()
 	if err != nil {
+		fmt.Printf("getCanvas: Failed to get HTTP event: %v\n", err)
 		return 1
 	}
+
+	// Initialize databases
+	initDatabases()
 
 	// Get canvas from database
 	canvas, err := getCanvasFromDB()
 	if err != nil {
+		fmt.Printf("getCanvas: Failed to get canvas from database: %v\n", err)
 		return fail(h, err, 500)
 	}
 
@@ -820,11 +817,13 @@ func getCanvas(e event.Event) uint32 {
 	// Encode and send response
 	jsonData, err := json.Marshal(response)
 	if err != nil {
+		fmt.Printf("getCanvas: Failed to marshal response: %v\n", err)
 		return fail(h, err, 500)
 	}
 
 	h.Headers().Set("Content-Type", "application/json")
 	h.Write(jsonData)
+	fmt.Printf("getCanvas: Canvas request completed successfully\n")
 	h.Return(200)
 	return 0
 }
@@ -834,14 +833,21 @@ func getCanvas(e event.Event) uint32 {
 //
 //export getUsers
 func getUsers(e event.Event) uint32 {
+	fmt.Printf("getUsers: Starting users request\n")
+
 	h, err := e.HTTP()
 	if err != nil {
+		fmt.Printf("getUsers: Failed to get HTTP event: %v\n", err)
 		return 1
 	}
+
+	// Initialize databases
+	initDatabases()
 
 	// Get users from database
 	users, err := getUsersFromDB()
 	if err != nil {
+		fmt.Printf("getUsers: Failed to get users from database: %v\n", err)
 		return fail(h, err, 500)
 	}
 
@@ -851,11 +857,13 @@ func getUsers(e event.Event) uint32 {
 	// Encode and send response
 	jsonData, err := json.Marshal(response)
 	if err != nil {
+		fmt.Printf("getUsers: Failed to marshal response: %v\n", err)
 		return fail(h, err, 500)
 	}
 
 	h.Headers().Set("Content-Type", "application/json")
 	h.Write(jsonData)
+	fmt.Printf("getUsers: Users request completed successfully\n")
 	h.Return(200)
 	return 0
 }
@@ -885,12 +893,7 @@ func sendMessage(e event.Event) uint32 {
 	}
 
 	// Get user from database
-	db, err := database.New("/users")
-	if err != nil {
-		return fail(h, err, 500)
-	}
-
-	userData, err := db.Get(userID)
+	userData, err := usersDB.Get(userID)
 	if err != nil {
 		return fail(h, fmt.Errorf("user not found"), 404)
 	}
@@ -929,14 +932,21 @@ func sendMessage(e event.Event) uint32 {
 //
 //export getMessages
 func getMessages(e event.Event) uint32 {
+	fmt.Printf("getMessages: Starting messages request\n")
+
 	h, err := e.HTTP()
 	if err != nil {
+		fmt.Printf("getMessages: Failed to get HTTP event: %v\n", err)
 		return 1
 	}
+
+	// Initialize databases
+	initDatabases()
 
 	// Get messages from database
 	messages, err := getChatMessagesFromDB()
 	if err != nil {
+		fmt.Printf("getMessages: Failed to get messages from database: %v\n", err)
 		return fail(h, err, 500)
 	}
 
@@ -951,11 +961,13 @@ func getMessages(e event.Event) uint32 {
 	// Encode and send response
 	jsonData, err := json.Marshal(response)
 	if err != nil {
+		fmt.Printf("getMessages: Failed to marshal response: %v\n", err)
 		return fail(h, err, 500)
 	}
 
 	h.Headers().Set("Content-Type", "application/json")
 	h.Write(jsonData)
+	fmt.Printf("getMessages: Messages request completed successfully\n")
 	h.Return(200)
 	return 0
 }
