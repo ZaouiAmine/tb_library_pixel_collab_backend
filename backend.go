@@ -436,22 +436,13 @@ func placePixel(e event.Event) uint32 {
 		Timestamp: time.Now().UnixMilli(),
 	}
 
-	// Save pixel to database
-	if err := savePixelToDB(pixel); err != nil {
+	// Publish pixel update - subscriber will handle database operations
+	if err := publishPixelUpdate(pixel); err != nil {
+		fmt.Printf("placePixel: Failed to publish pixel update: %v\n", err)
 		return fail(h, err, 500)
 	}
 
-	// Update user stats
-	user.PixelsPlaced++
-	user.LastSeen = time.Now().UnixMilli()
-
-	if err := saveUserToDB(user); err != nil {
-		return fail(h, err, 500)
-	}
-
-	// Publish updates
-	publishPixelUpdate(pixel)
-	publishUserUpdate(user)
+	fmt.Printf("placePixel: Pixel published successfully: (%d,%d) by %s\n", pixel.X, pixel.Y, pixel.UserID)
 
 	h.Return(200)
 	return 0
@@ -491,13 +482,13 @@ func joinGame(e event.Event) uint32 {
 		PixelsPlaced: 0,
 	}
 
-	// Save user to database
-	if err := saveUserToDB(user); err != nil {
+	// Publish user update - subscriber will handle database operations
+	if err := publishUserUpdate(user); err != nil {
+		fmt.Printf("joinGame: Failed to publish user update: %v\n", err)
 		return fail(h, err, 500)
 	}
 
-	// Publish user update
-	publishUserUpdate(user)
+	fmt.Printf("joinGame: User published successfully: %s (%s)\n", user.Username, user.ID)
 
 	// Return user data
 	userData, err := json.Marshal(user)
@@ -675,13 +666,13 @@ func sendMessage(e event.Event) uint32 {
 		Type:      "user",
 	}
 
-	// Save message to database
-	if err := saveChatMessageToDB(message); err != nil {
+	// Publish chat message - subscriber will handle database operations
+	if err := publishChatMessage(message); err != nil {
+		fmt.Printf("sendMessage: Failed to publish chat message: %v\n", err)
 		return fail(h, err, 500)
 	}
 
-	// Publish chat message
-	publishChatMessage(message)
+	fmt.Printf("sendMessage: Chat message published successfully: %s: %s\n", message.Username, message.Message)
 
 	h.Return(200)
 	return 0
