@@ -85,14 +85,6 @@ type ChatMessagesResponse struct {
 
 // ===== Global State Management =====
 
-// Database connections with connection pooling
-var (
-	canvasDB database.Database
-	usersDB  database.Database
-	chatDB   database.Database
-	dbInit   sync.Once
-)
-
 // In-memory cache for better performance
 var (
 	canvasCache     [][]Pixel
@@ -122,33 +114,8 @@ func isValidPixel(x, y int) bool {
 
 // ===== Database Operations =====
 
-// initDatabases initializes database connections
-func initDatabases() {
-	dbInit.Do(func() {
-		var err error
-		canvasDB, err = database.New("/canvas")
-		if err != nil {
-			fmt.Printf("Failed to initialize canvas database: %v\n", err)
-		}
-
-		usersDB, err = database.New("/users")
-		if err != nil {
-			fmt.Printf("Failed to initialize users database: %v\n", err)
-		}
-
-		chatDB, err = database.New("/chat")
-		if err != nil {
-			fmt.Printf("Failed to initialize chat database: %v\n", err)
-		}
-
-		fmt.Printf("Database connections initialized successfully\n")
-	})
-}
-
 // getCanvasFromDB retrieves canvas from database with caching
 func getCanvasFromDB() ([][]Pixel, error) {
-	initDatabases()
-
 	// Check cache first
 	cacheMutex.RLock()
 	if cacheValid && time.Now().UnixMilli()-lastCacheUpdate < 5000 { // 5 second cache
@@ -162,17 +129,23 @@ func getCanvasFromDB() ([][]Pixel, error) {
 	}
 	cacheMutex.RUnlock()
 
-	// Initialize canvas if not exists
-	widthData, err := canvasDB.Get("width")
+	// Create & Open the database
+	db, err := database.New("/canvas")
 	if err != nil {
-		canvasDB.Put("width", []byte(strconv.Itoa(CanvasWidth)))
-		canvasDB.Put("height", []byte(strconv.Itoa(CanvasHeight)))
+		return nil, err
+	}
+
+	// Initialize canvas if not exists
+	widthData, err := db.Get("width")
+	if err != nil {
+		db.Put("width", []byte(strconv.Itoa(CanvasWidth)))
+		db.Put("height", []byte(strconv.Itoa(CanvasHeight)))
 		widthData = []byte(strconv.Itoa(CanvasWidth))
 	}
 
-	heightData, err := canvasDB.Get("height")
+	heightData, err := db.Get("height")
 	if err != nil {
-		canvasDB.Put("height", []byte(strconv.Itoa(CanvasHeight)))
+		db.Put("height", []byte(strconv.Itoa(CanvasHeight)))
 		heightData = []byte(strconv.Itoa(CanvasHeight))
 	}
 
@@ -191,10 +164,10 @@ func getCanvasFromDB() ([][]Pixel, error) {
 	}
 
 	// Load existing pixels
-	keys, err := canvasDB.List("pixels/")
+	keys, err := db.List("pixels/")
 	if err == nil {
 		for _, key := range keys {
-			pixelData, err := canvasDB.Get(key)
+			pixelData, err := db.Get(key)
 			if err != nil {
 				continue
 			}
@@ -222,17 +195,21 @@ func getCanvasFromDB() ([][]Pixel, error) {
 
 // savePixelToDB saves pixel to database and updates cache
 func savePixelToDB(pixel Pixel) error {
-	initDatabases()
-
-	pixelData, err := json.Marshal(pixel)
+	// Create & Open the database
+	db, err := database.New("/canvas")
 	if err != nil {
 		return err
 	}
 
-	key := fmt.Sprintf("pixels/%d_%d", pixel.X, pixel.Y)
-	err = canvasDB.Put(key, pixelData)
+	pixelData, err := json.Marshal(pixel)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to marshal pixel: %v", err)
+	}
+
+	key := fmt.Sprintf("pixels/%d_%d", pixel.X, pixel.Y)
+	err = db.Put(key, pixelData)
+	if err != nil {
+		return fmt.Errorf("failed to save pixel to database: %v", err)
 	}
 
 	// Update cache
@@ -247,9 +224,13 @@ func savePixelToDB(pixel Pixel) error {
 
 // getUsersFromDB retrieves users from database
 func getUsersFromDB() ([]User, error) {
-	initDatabases()
+	// Create & Open the database
+	db, err := database.New("/users")
+	if err != nil {
+		return nil, err
+	}
 
-	keys, err := usersDB.List("")
+	keys, err := db.List("")
 	if err != nil {
 		return []User{}, nil
 	}
@@ -258,7 +239,7 @@ func getUsersFromDB() ([]User, error) {
 	now := time.Now().UnixMilli()
 
 	for _, key := range keys {
-		userData, err := usersDB.Get(key)
+		userData, err := db.Get(key)
 		if err != nil {
 			continue
 		}
@@ -278,28 +259,41 @@ func getUsersFromDB() ([]User, error) {
 
 // saveUserToDB saves user to database
 func saveUserToDB(user User) error {
-	initDatabases()
-
-	userData, err := json.Marshal(user)
+	// Create & Open the database
+	db, err := database.New("/users")
 	if err != nil {
 		return err
 	}
 
-	return usersDB.Put(user.ID, userData)
+	userData, err := json.Marshal(user)
+	if err != nil {
+		return fmt.Errorf("failed to marshal user: %v", err)
+	}
+
+	err = db.Put(user.ID, userData)
+	if err != nil {
+		return fmt.Errorf("failed to save user to database: %v", err)
+	}
+
+	return nil
 }
 
 // getChatMessagesFromDB retrieves chat messages from database
 func getChatMessagesFromDB() ([]ChatMessage, error) {
-	initDatabases()
+	// Create & Open the database
+	db, err := database.New("/chat")
+	if err != nil {
+		return nil, err
+	}
 
-	keys, err := chatDB.List("")
+	keys, err := db.List("")
 	if err != nil {
 		return []ChatMessage{}, nil
 	}
 
 	var messages []ChatMessage
 	for _, key := range keys {
-		messageData, err := chatDB.Get(key)
+		messageData, err := db.Get(key)
 		if err != nil {
 			continue
 		}
@@ -322,14 +316,18 @@ func getChatMessagesFromDB() ([]ChatMessage, error) {
 
 // saveChatMessageToDB saves chat message to database
 func saveChatMessageToDB(message ChatMessage) error {
-	initDatabases()
+	// Create & Open the database
+	db, err := database.New("/chat")
+	if err != nil {
+		return err
+	}
 
 	messageData, err := json.Marshal(message)
 	if err != nil {
 		return err
 	}
 
-	return chatDB.Put(message.ID, messageData)
+	return db.Put(message.ID, messageData)
 }
 
 // ===== Pub/Sub Functions =====
@@ -387,8 +385,6 @@ func publishChatMessage(message ChatMessage) error {
 func placePixel(e event.Event) uint32 {
 	fmt.Printf("placePixel: Starting request\n")
 
-	initDatabases()
-
 	h, err := e.HTTP()
 	if err != nil {
 		fmt.Printf("placePixel: Failed to get HTTP event: %v\n", err)
@@ -415,8 +411,14 @@ func placePixel(e event.Event) uint32 {
 	}
 
 	// Get user from database
-	userData, err := usersDB.Get(userID)
+	db, err := database.New("/users")
 	if err != nil {
+		return fail(h, err, 500)
+	}
+
+	userData, err := db.Get(userID)
+	if err != nil {
+		fmt.Printf("placePixel: User not found in database: %s, error: %v\n", userID, err)
 		return fail(h, fmt.Errorf("user not found"), 404)
 	}
 
@@ -460,8 +462,6 @@ func placePixel(e event.Event) uint32 {
 //export joinGame
 func joinGame(e event.Event) uint32 {
 	fmt.Printf("joinGame: Starting request\n")
-
-	initDatabases()
 
 	h, err := e.HTTP()
 	if err != nil {
@@ -527,7 +527,12 @@ func leaveGame(e event.Event) uint32 {
 	}
 
 	// Get user from database
-	userData, err := usersDB.Get(userID)
+	db, err := database.New("/users")
+	if err != nil {
+		return fail(h, err, 500)
+	}
+
+	userData, err := db.Get(userID)
 	if err != nil {
 		return fail(h, fmt.Errorf("user not found"), 404)
 	}
@@ -645,7 +650,12 @@ func sendMessage(e event.Event) uint32 {
 	}
 
 	// Get user from database
-	userData, err := usersDB.Get(userID)
+	db, err := database.New("/users")
+	if err != nil {
+		return fail(h, err, 500)
+	}
+
+	userData, err := db.Get(userID)
 	if err != nil {
 		return fail(h, fmt.Errorf("user not found"), 404)
 	}
@@ -861,13 +871,17 @@ func initCanvas(e event.Event) uint32 {
 		return 1
 	}
 
-	initDatabases()
-
-	// Set canvas dimensions
-	if err := canvasDB.Put("width", []byte(strconv.Itoa(CanvasWidth))); err != nil {
+	// Create & Open the database
+	db, err := database.New("/canvas")
+	if err != nil {
 		return fail(h, err, 500)
 	}
-	if err := canvasDB.Put("height", []byte(strconv.Itoa(CanvasHeight))); err != nil {
+
+	// Set canvas dimensions
+	if err := db.Put("width", []byte(strconv.Itoa(CanvasWidth))); err != nil {
+		return fail(h, err, 500)
+	}
+	if err := db.Put("height", []byte(strconv.Itoa(CanvasHeight))); err != nil {
 		return fail(h, err, 500)
 	}
 
