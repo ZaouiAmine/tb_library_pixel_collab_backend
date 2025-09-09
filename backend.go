@@ -92,10 +92,11 @@ type ChatMessagesResponse struct {
 
 // Global database connections (connection pooling)
 var (
-	canvasDB database.Database
-	usersDB  database.Database
-	chatDB   database.Database
-	dbInit   sync.Once
+	canvasDB  database.Database
+	usersDB   database.Database
+	chatDB    database.Database
+	dbInit    sync.Once
+	batchInit sync.Once
 )
 
 // In-memory batching for database operations
@@ -158,6 +159,8 @@ func (b *PixelBatch) Flush() error {
 		return nil
 	}
 
+	pixelCount := len(b.pixels)
+
 	// Save all pixels in batch
 	for _, pixel := range b.pixels {
 		if err := savePixelToDBOptimized(pixel); err != nil {
@@ -167,7 +170,7 @@ func (b *PixelBatch) Flush() error {
 
 	// Clear the batch
 	b.pixels = b.pixels[:0]
-	fmt.Printf("Flushed %d pixels to database\n", len(b.pixels))
+	fmt.Printf("Flushed %d pixels to database\n", pixelCount)
 	return nil
 }
 
@@ -185,6 +188,8 @@ func (b *UserBatch) Flush() error {
 		return nil
 	}
 
+	userCount := len(b.users)
+
 	// Save all users in batch
 	for _, user := range b.users {
 		if err := saveUserToDBOptimized(user); err != nil {
@@ -194,7 +199,7 @@ func (b *UserBatch) Flush() error {
 
 	// Clear the batch
 	b.users = b.users[:0]
-	fmt.Printf("Flushed %d users to database\n", len(b.users))
+	fmt.Printf("Flushed %d users to database\n", userCount)
 	return nil
 }
 
@@ -212,6 +217,8 @@ func (b *MessageBatch) Flush() error {
 		return nil
 	}
 
+	messageCount := len(b.messages)
+
 	// Save all messages in batch
 	for _, message := range b.messages {
 		if err := saveChatMessageToDBOptimized(message); err != nil {
@@ -221,7 +228,7 @@ func (b *MessageBatch) Flush() error {
 
 	// Clear the batch
 	b.messages = b.messages[:0]
-	fmt.Printf("Flushed %d messages to database\n", len(b.messages))
+	fmt.Printf("Flushed %d messages to database\n", messageCount)
 	return nil
 }
 
@@ -979,45 +986,42 @@ func onPixelUpdate(e event.Event) uint32 {
 		return 1
 	}
 
-	// Process asynchronously to avoid blocking
-	go func() {
-		// Add pixel to batch for efficient processing
-		pixelBatch.Add(pixel)
+	// Process synchronously (WASM doesn't support goroutines)
+	// Add pixel to batch for efficient processing
+	pixelBatch.Add(pixel)
 
-		// Flush batch if it reaches a certain size
-		pixelBatch.mutex.Lock()
-		batchSize := len(pixelBatch.pixels)
-		pixelBatch.mutex.Unlock()
+	// Flush batch if it reaches a certain size
+	pixelBatch.mutex.Lock()
+	batchSize := len(pixelBatch.pixels)
+	pixelBatch.mutex.Unlock()
 
-		if batchSize >= 10 {
-			pixelBatch.Flush()
-		}
+	if batchSize >= 10 {
+		pixelBatch.Flush()
+	}
 
-		// Update user stats asynchronously
-		initDatabases()
-		userData, err := usersDB.Get(pixel.UserID)
-		if err == nil {
-			var user User
-			if err := json.Unmarshal(userData, &user); err == nil {
-				user.PixelsPlaced++
-				user.LastSeen = time.Now().UnixMilli()
-				userBatch.Add(user)
+	// Update user stats
+	initDatabases()
+	userData, err := usersDB.Get(pixel.UserID)
+	if err == nil {
+		var user User
+		if err := json.Unmarshal(userData, &user); err == nil {
+			user.PixelsPlaced++
+			user.LastSeen = time.Now().UnixMilli()
+			userBatch.Add(user)
 
-				// Flush user batch if needed
-				userBatch.mutex.Lock()
-				userBatchSize := len(userBatch.users)
-				userBatch.mutex.Unlock()
+			// Flush user batch if needed
+			userBatch.mutex.Lock()
+			userBatchSize := len(userBatch.users)
+			userBatch.mutex.Unlock()
 
-				if userBatchSize >= 5 {
-					userBatch.Flush()
-				}
+			if userBatchSize >= 5 {
+				userBatch.Flush()
 			}
 		}
+	}
 
-		fmt.Printf("Pixel queued: (%d,%d) by %s\n", pixel.X, pixel.Y, pixel.UserID)
-	}()
+	fmt.Printf("Pixel processed: (%d,%d) by %s\n", pixel.X, pixel.Y, pixel.UserID)
 
-	// Return immediately for better performance
 	return 0
 }
 
@@ -1088,24 +1092,21 @@ func onChatMessage(e event.Event) uint32 {
 		return 1
 	}
 
-	// Process asynchronously to avoid blocking
-	go func() {
-		// Add message to batch for efficient processing
-		messageBatch.Add(message)
+	// Process synchronously (WASM doesn't support goroutines)
+	// Add message to batch for efficient processing
+	messageBatch.Add(message)
 
-		// Flush batch if it reaches a certain size
-		messageBatch.mutex.Lock()
-		batchSize := len(messageBatch.messages)
-		messageBatch.mutex.Unlock()
+	// Flush batch if it reaches a certain size
+	messageBatch.mutex.Lock()
+	batchSize := len(messageBatch.messages)
+	messageBatch.mutex.Unlock()
 
-		if batchSize >= 20 {
-			messageBatch.Flush()
-		}
+	if batchSize >= 20 {
+		messageBatch.Flush()
+	}
 
-		fmt.Printf("Chat message queued: %s: %s\n", message.Username, message.Message)
-	}()
+	fmt.Printf("Chat message processed: %s: %s\n", message.Username, message.Message)
 
-	// Return immediately for better performance
 	return 0
 }
 
@@ -1208,28 +1209,20 @@ func initCanvas(e event.Event) uint32 {
 	return 0
 }
 
-// ===== Background Batch Processing =====
+// ===== Batch Processing (WASM Compatible) =====
 
-// Start periodic batch flushing (called once during initialization)
-//
-//lint:ignore U1000 used for background processing
-func startBatchProcessor() {
-	go func() {
-		ticker := time.NewTicker(5 * time.Second) // Flush every 5 seconds
-		defer ticker.Stop()
-
-		for range ticker.C {
-			// Flush all batches periodically
-			pixelBatch.Flush()
-			userBatch.Flush()
-			messageBatch.Flush()
-		}
-	}()
+// Manual batch flushing functions (WASM doesn't support background goroutines)
+//lint:ignore U1000 used for manual batch processing
+func flushAllBatches() {
+	pixelBatch.Flush()
+	userBatch.Flush()
+	messageBatch.Flush()
 }
 
-// Initialize the batch processor (call this from a main function or init)
-//
+// Initialize batch processing (WASM compatible - no background processes)
 //lint:ignore U1000 used for initialization
 func initBatchProcessor() {
-	startBatchProcessor()
+	// In WASM environment, we rely on size-based flushing only
+	// No background processes are supported
+	fmt.Printf("Batch processing initialized (WASM compatible)\n")
 }
