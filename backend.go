@@ -13,6 +13,8 @@ import (
 )
 
 // Shared helper for errors → writes error message + returns status code
+//
+
 func fail(h http.Event, err error, code int) uint32 {
 	h.Write([]byte(err.Error()))
 	h.Return(code)
@@ -171,18 +173,31 @@ func getCanvasFromDB() ([][]Pixel, error) {
 
 // Save pixel to database
 func savePixelToDB(pixel Pixel) error {
+	fmt.Printf("savePixelToDB: Starting to save pixel at (%d,%d)\n", pixel.X, pixel.Y)
+
 	db, err := database.New("/canvas")
 	if err != nil {
+		fmt.Printf("savePixelToDB: Failed to connect to canvas database: %v\n", err)
 		return err
 	}
 
 	pixelData, err := json.Marshal(pixel)
 	if err != nil {
+		fmt.Printf("savePixelToDB: Failed to marshal pixel data: %v\n", err)
 		return err
 	}
 
 	key := fmt.Sprintf("pixels/%d_%d", pixel.X, pixel.Y)
-	return db.Put(key, pixelData)
+	fmt.Printf("savePixelToDB: Saving pixel with key: %s\n", key)
+
+	err = db.Put(key, pixelData)
+	if err != nil {
+		fmt.Printf("savePixelToDB: Failed to save pixel to database: %v\n", err)
+		return err
+	}
+
+	fmt.Printf("savePixelToDB: Pixel saved successfully\n")
+	return nil
 }
 
 // Get users from database
@@ -224,17 +239,28 @@ func getUsersFromDB() ([]User, error) {
 
 // Save user to database
 func saveUserToDB(user User) error {
+	fmt.Printf("saveUserToDB: Starting to save user: %s\n", user.ID)
+
 	db, err := database.New("/users")
 	if err != nil {
+		fmt.Printf("saveUserToDB: Failed to connect to users database: %v\n", err)
 		return err
 	}
 
 	userData, err := json.Marshal(user)
 	if err != nil {
+		fmt.Printf("saveUserToDB: Failed to marshal user data: %v\n", err)
 		return err
 	}
 
-	return db.Put(user.ID, userData)
+	err = db.Put(user.ID, userData)
+	if err != nil {
+		fmt.Printf("saveUserToDB: Failed to save user to database: %v\n", err)
+		return err
+	}
+
+	fmt.Printf("saveUserToDB: User saved successfully\n")
+	return nil
 }
 
 // Get chat messages from database
@@ -336,45 +362,57 @@ func publishChatMessage(message ChatMessage) error {
 //
 //export placePixel
 func placePixel(e event.Event) uint32 {
+	fmt.Printf("placePixel: Starting pixel placement request\n")
+
 	h, err := e.HTTP()
 	if err != nil {
+		fmt.Printf("placePixel: Failed to get HTTP event: %v\n", err)
 		return 1
 	}
 
 	// Get user ID from headers
 	userID, err := h.Headers().Get("X-User-ID")
 	if err != nil || userID == "" {
+		fmt.Printf("placePixel: User ID missing or invalid: %v\n", err)
 		return fail(h, fmt.Errorf("user ID required"), 401)
 	}
+	fmt.Printf("placePixel: User ID: %s\n", userID)
 
 	// Decode request body
 	var req PlacePixelRequest
 	dec := json.NewDecoder(h.Body())
 	defer h.Body().Close()
 	if err = dec.Decode(&req); err != nil {
+		fmt.Printf("placePixel: Failed to decode request body: %v\n", err)
 		return fail(h, err, 400)
 	}
+	fmt.Printf("placePixel: Request - X:%d, Y:%d, Color:%s\n", req.X, req.Y, req.Color)
 
 	// Get user from database
 	db, err := database.New("/users")
 	if err != nil {
+		fmt.Printf("placePixel: Failed to connect to users database: %v\n", err)
 		return fail(h, err, 500)
 	}
 
 	userData, err := db.Get(userID)
 	if err != nil {
+		fmt.Printf("placePixel: User not found in database: %s, error: %v\n", userID, err)
 		return fail(h, fmt.Errorf("user not found"), 404)
 	}
 
 	var user User
 	if err := json.Unmarshal(userData, &user); err != nil {
+		fmt.Printf("placePixel: Failed to unmarshal user data: %v\n", err)
 		return fail(h, err, 500)
 	}
+	fmt.Printf("placePixel: User found - ID:%s, Username:%s, PixelsPlaced:%d\n", user.ID, user.Username, user.PixelsPlaced)
 
 	// Cooldown removed - allow immediate pixel placement
 
 	// Validate pixel coordinates (assuming 100x100 canvas)
 	if !isValidPixel(req.X, req.Y, 100, 100) {
+		fmt.Printf("placePixel: Invalid coordinates - X:%d, Y:%d\n", req.X, req.Y)
 		return fail(h, fmt.Errorf("invalid coordinates"), 400)
 	}
 
@@ -389,28 +427,37 @@ func placePixel(e event.Event) uint32 {
 
 	// Save pixel to database
 	if err := savePixelToDB(pixel); err != nil {
+		fmt.Printf("placePixel: Failed to save pixel to database: %v\n", err)
 		return fail(h, err, 500)
 	}
+	fmt.Printf("placePixel: Pixel saved successfully\n")
 
 	// Update user stats
 	user.PixelsPlaced++
 	user.LastSeen = time.Now().UnixMilli()
 
 	if err := saveUserToDB(user); err != nil {
+		fmt.Printf("placePixel: Failed to save user to database: %v\n", err)
 		return fail(h, err, 500)
 	}
+	fmt.Printf("placePixel: User stats updated successfully\n")
 
 	// Publish pixel update
 	if err := publishPixelUpdate(pixel); err != nil {
 		// Log error but don't fail the request
-		fmt.Printf("Failed to publish pixel update: %v\n", err)
+		fmt.Printf("placePixel: Failed to publish pixel update: %v\n", err)
+	} else {
+		fmt.Printf("placePixel: Pixel update published successfully\n")
 	}
 
 	// Publish user update
 	if err := publishUserUpdate(user); err != nil {
-		fmt.Printf("Failed to publish user update: %v\n", err)
+		fmt.Printf("placePixel: Failed to publish user update: %v\n", err)
+	} else {
+		fmt.Printf("placePixel: User update published successfully\n")
 	}
 
+	fmt.Printf("placePixel: Request completed successfully\n")
 	h.Return(200)
 	return 0
 }
@@ -420,8 +467,11 @@ func placePixel(e event.Event) uint32 {
 //
 //export joinGame
 func joinGame(e event.Event) uint32 {
+	fmt.Printf("joinGame: Starting join game request\n")
+
 	h, err := e.HTTP()
 	if err != nil {
+		fmt.Printf("joinGame: Failed to get HTTP event: %v\n", err)
 		return 1
 	}
 
@@ -430,11 +480,14 @@ func joinGame(e event.Event) uint32 {
 	dec := json.NewDecoder(h.Body())
 	defer h.Body().Close()
 	if err = dec.Decode(&req); err != nil {
+		fmt.Printf("joinGame: Failed to decode request body: %v\n", err)
 		return fail(h, err, 400)
 	}
+	fmt.Printf("joinGame: Request - Username:%s, UserID:%s\n", req.Username, req.UserID)
 
 	// Validate input
 	if req.Username == "" || req.UserID == "" {
+		fmt.Printf("joinGame: Invalid input - Username:%s, UserID:%s\n", req.Username, req.UserID)
 		return fail(h, fmt.Errorf("username and user ID required"), 400)
 	}
 
@@ -447,25 +500,32 @@ func joinGame(e event.Event) uint32 {
 		LastSeen:     time.Now().UnixMilli(),
 		PixelsPlaced: 0,
 	}
+	fmt.Printf("joinGame: Created user - ID:%s, Username:%s, Color:%s\n", user.ID, user.Username, user.Color)
 
 	// Save user to database
 	if err := saveUserToDB(user); err != nil {
+		fmt.Printf("joinGame: Failed to save user to database: %v\n", err)
 		return fail(h, err, 500)
 	}
+	fmt.Printf("joinGame: User saved to database successfully\n")
 
 	// Publish user update
 	if err := publishUserUpdate(user); err != nil {
-		fmt.Printf("Failed to publish user update: %v\n", err)
+		fmt.Printf("joinGame: Failed to publish user update: %v\n", err)
+	} else {
+		fmt.Printf("joinGame: User update published successfully\n")
 	}
 
 	// Return user data
 	userData, err := json.Marshal(user)
 	if err != nil {
+		fmt.Printf("joinGame: Failed to marshal user data: %v\n", err)
 		return fail(h, err, 500)
 	}
 
 	h.Headers().Set("Content-Type", "application/json")
 	h.Write(userData)
+	fmt.Printf("joinGame: Request completed successfully\n")
 	h.Return(200)
 	return 0
 }
