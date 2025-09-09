@@ -743,6 +743,52 @@ func onPixelUpdate(e event.Event) uint32 {
 		return 1
 	}
 
+	// Validate pixel coordinates
+	if !isValidPixel(pixel.X, pixel.Y) {
+		fmt.Printf("Invalid pixel coordinates: (%d,%d)\n", pixel.X, pixel.Y)
+		return 1
+	}
+
+	// Validate user exists and is online
+	db, err := database.New("/users")
+	if err != nil {
+		fmt.Printf("Error creating users database: %v\n", err)
+		return 1
+	}
+
+	userData, err := db.Get(pixel.UserID)
+	if err != nil {
+		fmt.Printf("User not found: %s\n", pixel.UserID)
+		return 1
+	}
+
+	var user User
+	if err := json.Unmarshal(userData, &user); err != nil {
+		fmt.Printf("Error unmarshaling user: %v\n", err)
+		return 1
+	}
+
+	// Check if user is online
+	now := time.Now().UnixMilli()
+	if (now - user.LastSeen) > UserTimeout {
+		fmt.Printf("User %s is offline\n", pixel.UserID)
+		return 1
+	}
+
+	// Save pixel to database
+	if err := savePixelToDB(pixel); err != nil {
+		fmt.Printf("Error saving pixel to database: %v\n", err)
+		return 1
+	}
+
+	// Update user stats
+	user.PixelsPlaced++
+	user.LastSeen = now
+	if err := saveUserToDB(user); err != nil {
+		fmt.Printf("Error updating user stats: %v\n", err)
+		// Don't fail completely, pixel was saved
+	}
+
 	// Update cache
 	cacheMutex.Lock()
 	if cacheValid && pixel.Y < len(canvasCache) && pixel.X < len(canvasCache[pixel.Y]) {
@@ -750,7 +796,8 @@ func onPixelUpdate(e event.Event) uint32 {
 	}
 	cacheMutex.Unlock()
 
-	fmt.Printf("Pixel processed: (%d,%d) by %s\n", pixel.X, pixel.Y, pixel.UserID)
+	fmt.Printf("Pixel validated and saved: (%d,%d) by %s (total pixels: %d)\n",
+		pixel.X, pixel.Y, pixel.UserID, user.PixelsPlaced)
 	return 0
 }
 
@@ -776,8 +823,20 @@ func onUserUpdate(e event.Event) uint32 {
 		return 1
 	}
 
-	fmt.Printf("User update: id=%s, username=%s, online=%t\n",
-		user.ID, user.Username, user.IsOnline)
+	// Validate user data
+	if user.ID == "" || user.Username == "" {
+		fmt.Printf("Invalid user data: missing ID or username\n")
+		return 1
+	}
+
+	// Save user to database
+	if err := saveUserToDB(user); err != nil {
+		fmt.Printf("Error saving user to database: %v\n", err)
+		return 1
+	}
+
+	fmt.Printf("User validated and saved: id=%s, username=%s, online=%t, pixels=%d\n",
+		user.ID, user.Username, user.IsOnline, user.PixelsPlaced)
 
 	return 0
 }
@@ -804,7 +863,32 @@ func onChatMessage(e event.Event) uint32 {
 		return 1
 	}
 
-	fmt.Printf("Chat message: %s: %s\n", message.Username, message.Message)
+	// Validate message data
+	if message.UserID == "" || message.Username == "" || message.Message == "" {
+		fmt.Printf("Invalid chat message: missing required fields\n")
+		return 1
+	}
+
+	// Validate user exists
+	db, err := database.New("/users")
+	if err != nil {
+		fmt.Printf("Error creating users database: %v\n", err)
+		return 1
+	}
+
+	_, err = db.Get(message.UserID)
+	if err != nil {
+		fmt.Printf("User not found for chat message: %s\n", message.UserID)
+		return 1
+	}
+
+	// Save message to database
+	if err := saveChatMessageToDB(message); err != nil {
+		fmt.Printf("Error saving chat message to database: %v\n", err)
+		return 1
+	}
+
+	fmt.Printf("Chat message validated and saved: %s: %s\n", message.Username, message.Message)
 	return 0
 }
 
