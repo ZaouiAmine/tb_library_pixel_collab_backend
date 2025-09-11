@@ -143,6 +143,15 @@ func initCanvas() error {
 		return err
 	}
 
+	// Check if canvas already exists
+	_, err = db.Get("canvas")
+	if err == nil {
+		// Canvas already exists, don't overwrite it
+		fmt.Printf("Canvas already exists, skipping initialization\n")
+		return nil
+	}
+
+	fmt.Printf("Initializing new canvas...\n")
 	// Initialize empty canvas with proper pixel coordinates
 	canvas := make([][]Pixel, CanvasHeight)
 	for y := range canvas {
