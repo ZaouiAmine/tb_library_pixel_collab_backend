@@ -124,6 +124,28 @@ func initCanvas() error {
 	return db.Put("canvas", canvasData)
 }
 
+func resetCanvas() error {
+	db, err := database.New("/canvas")
+	if err != nil {
+		return err
+	}
+
+	// Delete the existing canvas data
+	if err := db.Delete("canvas"); err != nil {
+		// Ignore error if canvas doesn't exist
+		fmt.Printf("Note: Canvas didn't exist to delete: %v\n", err)
+	}
+
+	// Clear the cache
+	cacheMutex.Lock()
+	cacheValid = false
+	canvasCache = nil
+	cacheMutex.Unlock()
+
+	// Initialize fresh canvas
+	return initCanvas()
+}
+
 func getCanvasFromDB() ([][]Pixel, error) {
 	db, err := database.New("/canvas")
 	if err != nil {
@@ -144,7 +166,45 @@ func getCanvasFromDB() ([][]Pixel, error) {
 
 	var canvas [][]Pixel
 	if err := json.Unmarshal(data, &canvas); err != nil {
-		return nil, err
+		fmt.Printf("Error unmarshaling canvas data: %v\n", err)
+		// If unmarshaling fails, the canvas data might be corrupted
+		// Try to reinitialize the canvas
+		fmt.Printf("Attempting to reinitialize canvas due to corruption...\n")
+		if err := initCanvas(); err != nil {
+			return nil, err
+		}
+		data, err = db.Get("canvas")
+		if err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(data, &canvas); err != nil {
+			return nil, err
+		}
+	}
+
+	// Validate canvas structure
+	if len(canvas) == 0 || len(canvas[0]) == 0 {
+		fmt.Printf("Canvas has invalid dimensions, reinitializing...\n")
+		if err := initCanvas(); err != nil {
+			return nil, err
+		}
+		data, err = db.Get("canvas")
+		if err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(data, &canvas); err != nil {
+			return nil, err
+		}
+	}
+
+	// Ensure all pixels have proper coordinates
+	for y := range canvas {
+		for x := range canvas[y] {
+			if canvas[y][x].X != x || canvas[y][x].Y != y {
+				canvas[y][x].X = x
+				canvas[y][x].Y = y
+			}
+		}
 	}
 
 	return canvas, nil
@@ -490,9 +550,38 @@ func initCanvasHandler(e event.Event) uint32 {
 		return fail(h, err, 500)
 	}
 
+	// Clear the cache to force reload from database
+	cacheMutex.Lock()
+	cacheValid = false
+	canvasCache = nil
+	cacheMutex.Unlock()
+
 	fmt.Printf("Canvas initialized successfully\n")
 	h.Headers().Set("Content-Type", "application/json")
 	h.Write([]byte(`{"status": "success", "message": "Canvas initialized"}`))
+	h.Return(200)
+	return 0
+}
+
+// resetCanvasHandler completely resets the canvas
+//
+//export resetCanvas
+func resetCanvasHandler(e event.Event) uint32 {
+	h, err := e.HTTP()
+	if err != nil {
+		fmt.Printf("Error getting HTTP event for resetCanvas: %v\n", err)
+		return 1
+	}
+
+	fmt.Printf("Resetting canvas...\n")
+	if err := resetCanvas(); err != nil {
+		fmt.Printf("Error resetting canvas: %v\n", err)
+		return fail(h, err, 500)
+	}
+
+	fmt.Printf("Canvas reset successfully\n")
+	h.Headers().Set("Content-Type", "application/json")
+	h.Write([]byte(`{"status": "success", "message": "Canvas reset"}`))
 	h.Return(200)
 	return 0
 }
