@@ -98,10 +98,15 @@ func sanitizeMessage(message string) string {
 // ===== Database Operations =====
 
 func getDB() (database.Database, error) {
-	return database.New("/canvas")
+	db, err := database.New("/canvas")
+	if err != nil {
+		fmt.Printf("Error creating database connection: %v\n", err)
+		return db, err
+	}
+	return db, nil
 }
 
-func initCanvas() error {
+func createCanvas() error {
 	db, err := getDB()
 	if err != nil {
 		return err
@@ -141,7 +146,7 @@ func getCanvasFromDB() ([][]Pixel, error) {
 	data, err := db.Get("canvas")
 	if err != nil {
 		// Canvas doesn't exist, create it
-		if err := initCanvas(); err != nil {
+		if err := createCanvas(); err != nil {
 			return nil, err
 		}
 		data, err = db.Get("canvas")
@@ -154,7 +159,7 @@ func getCanvasFromDB() ([][]Pixel, error) {
 	var canvas [][]Pixel
 	if err := json.Unmarshal(data, &canvas); err != nil {
 		// Data is corrupted, recreate canvas
-		if err := initCanvas(); err != nil {
+		if err := createCanvas(); err != nil {
 			return nil, err
 		}
 		data, err = db.Get("canvas")
@@ -379,6 +384,7 @@ func publishChatMessage(message ChatMessage) error {
 func getCanvas(e event.Event) uint32 {
 	h, err := e.HTTP()
 	if err != nil {
+		fmt.Printf("Error getting HTTP handler in getCanvas: %v\n", err)
 		return 1
 	}
 
@@ -399,11 +405,13 @@ func getCanvas(e event.Event) uint32 {
 	// Get from database
 	canvas, err := getCanvasFromDB()
 	if err != nil {
+		fmt.Printf("Error getting canvas from database: %v\n", err)
 		return fail(h, err, 500)
 	}
 
 	canvasData, err := json.Marshal(canvas)
 	if err != nil {
+		fmt.Printf("Error marshaling canvas data: %v\n", err)
 		return fail(h, err, 500)
 	}
 
@@ -521,13 +529,13 @@ func getWebSocketURL(e event.Event) uint32 {
 }
 
 //export initCanvas
-func initCanvasHandler(e event.Event) uint32 {
+func initCanvas(e event.Event) uint32 {
 	h, err := e.HTTP()
 	if err != nil {
 		return 1
 	}
 
-	if err := initCanvas(); err != nil {
+	if err := createCanvas(); err != nil {
 		return fail(h, err, 500)
 	}
 
@@ -544,7 +552,7 @@ func initCanvasHandler(e event.Event) uint32 {
 }
 
 //export resetCanvas
-func resetCanvasHandler(e event.Event) uint32 {
+func resetCanvas(e event.Event) uint32 {
 	h, err := e.HTTP()
 	if err != nil {
 		return 1
@@ -567,7 +575,7 @@ func resetCanvasHandler(e event.Event) uint32 {
 	cacheMutex.Unlock()
 
 	// Initialize fresh canvas
-	if err := initCanvas(); err != nil {
+	if err := createCanvas(); err != nil {
 		return fail(h, err, 500)
 	}
 
@@ -589,30 +597,36 @@ func resetCanvasHandler(e event.Event) uint32 {
 func onPixelUpdate(e event.Event) uint32 {
 	channel, err := e.PubSub()
 	if err != nil {
+		fmt.Printf("Error getting PubSub channel in onPixelUpdate: %v\n", err)
 		return 1
 	}
 
 	data, err := channel.Data()
 	if err != nil {
+		fmt.Printf("Error getting channel data in onPixelUpdate: %v\n", err)
 		return 1
 	}
 
 	var pixel Pixel
 	if err := json.Unmarshal(data, &pixel); err != nil {
+		fmt.Printf("Error unmarshaling pixel data: %v\n", err)
 		return 1
 	}
 
 	// Validate pixel data
 	if pixel.X < 0 || pixel.X >= CanvasWidth || pixel.Y < 0 || pixel.Y >= CanvasHeight {
+		fmt.Printf("Invalid pixel coordinates: x=%d, y=%d (max: %dx%d)\n", pixel.X, pixel.Y, CanvasWidth, CanvasHeight)
 		return 1
 	}
 
 	if !isValidColor(pixel.Color) {
+		fmt.Printf("Invalid pixel color: %s\n", pixel.Color)
 		return 1
 	}
 
 	// Save to database
 	if err := savePixelToDB(pixel); err != nil {
+		fmt.Printf("Error saving pixel to database: %v\n", err)
 		return 1
 	}
 
