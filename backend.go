@@ -74,8 +74,8 @@ func isValidUsername(username string) bool {
 }
 
 func isValidColor(color string) bool {
-	return len(color) == 7 && color[0] == '#' && 
-		   strings.ContainsAny(color[1:], "0123456789ABCDEFabcdef")
+	return len(color) == 7 && color[0] == '#' &&
+		strings.ContainsAny(color[1:], "0123456789ABCDEFabcdef")
 }
 
 func sanitizeMessage(message string) string {
@@ -86,12 +86,12 @@ func sanitizeMessage(message string) string {
 	message = strings.ReplaceAll(message, "onload=", "")
 	message = strings.ReplaceAll(message, "onerror=", "")
 	message = strings.ReplaceAll(message, "onclick=", "")
-	
+
 	// Limit length
 	if len(message) > 500 {
 		message = message[:500]
 	}
-	
+
 	return strings.TrimSpace(message)
 }
 
@@ -466,22 +466,43 @@ func getWebSocketURL(e event.Event) uint32 {
 		return 1
 	}
 
-	channelName, _ := h.Query().Get("channel")
-	if channelName == "" {
-		return fail(h, fmt.Errorf("channel parameter required"), 400)
+	// Get room parameter from query string
+	room, err := h.Query().Get("room")
+	if err != nil || room == "" {
+		room = "pixelupdates"
 	}
 
-	channel, err := pubsub.Channel(channelName)
+	// Validate room name
+	allowedChannels := map[string]bool{
+		"pixelupdates": true,
+		"chatmessages": true,
+		"userupdates":  true,
+	}
+
+	if !allowedChannels[room] {
+		return fail(h, fmt.Errorf("invalid room name: %s", room), 400)
+	}
+
+	// Get the pub/sub channel
+	channel, err := pubsub.Channel(room)
 	if err != nil {
-		return fail(h, err, 500)
+		return fail(h, fmt.Errorf("failed to get channel %s: %v", room, err), 500)
 	}
 
-	wsUrl, err := channel.WebSocket().Url()
+	// Get the actual WebSocket URL from Taubyte
+	wsURL, err := channel.WebSocket().Url()
 	if err != nil {
-		return fail(h, err, 500)
+		return fail(h, fmt.Errorf("failed to get WebSocket URL for %s: %v", room, err), 500)
 	}
 
-	response := map[string]string{"url": wsUrl.Path}
+	// Return the channel configuration with the actual WebSocket URL
+	response := map[string]interface{}{
+		"channel":       room,
+		"room":          room,
+		"protocol":      "taubyte-pubsub",
+		"websocket_url": wsURL.Path,
+	}
+
 	responseData, err := json.Marshal(response)
 	if err != nil {
 		return fail(h, err, 500)
