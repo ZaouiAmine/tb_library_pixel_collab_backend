@@ -100,10 +100,20 @@ func initCanvas() error {
 		return err
 	}
 
-	// Initialize empty canvas
+	// Initialize empty canvas with proper pixel coordinates
 	canvas := make([][]Pixel, CanvasHeight)
 	for y := range canvas {
 		canvas[y] = make([]Pixel, CanvasWidth)
+		for x := range canvas[y] {
+			canvas[y][x] = Pixel{
+				X:         x,
+				Y:         y,
+				Color:     "#ffffff",
+				UserID:    "",
+				Username:  "",
+				Timestamp: 0,
+			}
+		}
 	}
 
 	canvasData, err := json.Marshal(canvas)
@@ -314,6 +324,7 @@ func publishChatMessage(message ChatMessage) error {
 func getCanvas(e event.Event) uint32 {
 	h, err := e.HTTP()
 	if err != nil {
+		fmt.Printf("Error getting HTTP event: %v\n", err)
 		return 1
 	}
 
@@ -327,18 +338,26 @@ func getCanvas(e event.Event) uint32 {
 			h.Write(canvasData)
 			h.Return(200)
 			return 0
+		} else {
+			fmt.Printf("Error marshaling cached canvas: %v\n", err)
 		}
+	} else {
+		fmt.Printf("Cache not valid or empty, cacheValid: %v, cacheLen: %d\n", cacheValid, len(canvasCache))
 	}
 	cacheMutex.RUnlock()
 
 	// Fallback to database
+	fmt.Printf("Fetching canvas from database...\n")
 	canvas, err := getCanvasFromDB()
 	if err != nil {
+		fmt.Printf("Error getting canvas from DB: %v\n", err)
 		return fail(h, err, 500)
 	}
 
+	fmt.Printf("Canvas loaded from DB, size: %dx%d\n", len(canvas), len(canvas[0]))
 	canvasData, err := json.Marshal(canvas)
 	if err != nil {
+		fmt.Printf("Error marshaling canvas: %v\n", err)
 		return fail(h, err, 500)
 	}
 
@@ -461,13 +480,19 @@ func getWebSocketURL(e event.Event) uint32 {
 func initCanvasHandler(e event.Event) uint32 {
 	h, err := e.HTTP()
 	if err != nil {
+		fmt.Printf("Error getting HTTP event for initCanvas: %v\n", err)
 		return 1
 	}
 
+	fmt.Printf("Initializing canvas...\n")
 	if err := initCanvas(); err != nil {
+		fmt.Printf("Error initializing canvas: %v\n", err)
 		return fail(h, err, 500)
 	}
 
+	fmt.Printf("Canvas initialized successfully\n")
+	h.Headers().Set("Content-Type", "application/json")
+	h.Write([]byte(`{"status": "success", "message": "Canvas initialized"}`))
 	h.Return(200)
 	return 0
 }
