@@ -14,10 +14,11 @@ import (
 
 // ===== Constants =====
 const (
-	CanvasWidth  = 100
-	CanvasHeight = 100
-	MaxMessages  = 100
-	UserTimeout  = 30000 // 30 seconds in milliseconds
+	CanvasWidth      = 100
+	CanvasHeight     = 100
+	MaxMessages      = 100
+	UserTimeout      = 30000 // 30 seconds in milliseconds
+	MaxPixelsPerUser = 1000
 )
 
 // ===== Data Structures =====
@@ -527,7 +528,11 @@ func onPixelUpdate(e event.Event) uint32 {
 		return 1
 	}
 
-	// Pixel limit removed - users can place unlimited pixels
+	// Check pixel limit
+	if user.PixelsPlaced >= MaxPixelsPerUser {
+		fmt.Printf("User %s has reached pixel limit\n", pixel.UserID)
+		return 1
+	}
 
 	// Add username to pixel
 	pixel.Username = user.Username
