@@ -484,16 +484,22 @@ func getWebSocketURL(e event.Event) uint32 {
 	}
 
 	// Get the pub/sub channel
+	fmt.Printf("Attempting to get channel: %s\n", room)
 	channel, err := pubsub.Channel(room)
 	if err != nil {
+		fmt.Printf("Error getting channel %s: %v\n", room, err)
 		return fail(h, fmt.Errorf("failed to get channel %s: %v", room, err), 500)
 	}
+	fmt.Printf("Successfully got channel: %s\n", room)
 
 	// Get the actual WebSocket URL from Taubyte
+	fmt.Printf("Getting WebSocket URL for channel: %s\n", room)
 	wsURL, err := channel.WebSocket().Url()
 	if err != nil {
+		fmt.Printf("Error getting WebSocket URL for %s: %v\n", room, err)
 		return fail(h, fmt.Errorf("failed to get WebSocket URL for %s: %v", room, err), 500)
 	}
+	fmt.Printf("Successfully got WebSocket URL for %s: %s\n", room, wsURL.Path)
 
 	// Return the channel configuration with the actual WebSocket URL
 	response := map[string]interface{}{
