@@ -201,17 +201,21 @@ func resetCanvas() error {
 func getCanvasFromDB() ([][]Pixel, error) {
 	db, err := database.New("/canvas")
 	if err != nil {
+		fmt.Printf("Error creating canvas database: %v\n", err)
 		return nil, err
 	}
 
 	data, err := db.Get("canvas")
 	if err != nil {
+		fmt.Printf("Canvas not found in database, initializing: %v\n", err)
 		// Initialize canvas if it doesn't exist
 		if err := initCanvas(); err != nil {
+			fmt.Printf("Error initializing canvas: %v\n", err)
 			return nil, err
 		}
 		data, err = db.Get("canvas")
 		if err != nil {
+			fmt.Printf("Error getting canvas after initialization: %v\n", err)
 			return nil, err
 		}
 	}
@@ -467,7 +471,22 @@ func getCanvas(e event.Event) uint32 {
 	canvas, err := getCanvasFromDB()
 	if err != nil {
 		fmt.Printf("Error getting canvas from DB: %v\n", err)
-		return fail(h, err, 500)
+		// Create a simple fallback canvas to prevent crashes
+		fmt.Printf("Creating fallback canvas...\n")
+		canvas = make([][]Pixel, CanvasHeight)
+		for y := range canvas {
+			canvas[y] = make([]Pixel, CanvasWidth)
+			for x := range canvas[y] {
+				canvas[y][x] = Pixel{
+					X:         x,
+					Y:         y,
+					Color:     "#ffffff",
+					UserID:    "",
+					Username:  "",
+					Timestamp: 0,
+				}
+			}
+		}
 	}
 
 	fmt.Printf("Canvas loaded from DB, size: %dx%d\n", len(canvas), len(canvas[0]))
