@@ -73,7 +73,7 @@ type ChatMessageRequest struct {
 
 // ===== Global State =====
 var (
-	canvasCache [][]Pixel
+	canvasCache [][]Pixel = make([][]Pixel, 0) // Initialize as empty slice, not nil
 	cacheMutex  sync.RWMutex
 	cacheValid  bool
 )
@@ -143,13 +143,9 @@ func initCanvas() error {
 		return err
 	}
 
-	// Check if canvas already exists
-	_, err = db.Get("canvas")
-	if err == nil {
-		// Canvas already exists, don't overwrite it
-		fmt.Printf("Canvas already exists, skipping initialization\n")
-		return nil
-	}
+	// Always reinitialize canvas to ensure it's in a valid state
+	// This prevents issues with corrupted canvas data
+	fmt.Printf("Reinitializing canvas to ensure valid state...\n")
 
 	fmt.Printf("Initializing new canvas...\n")
 	// Initialize empty canvas with proper pixel coordinates
@@ -201,31 +197,26 @@ func resetCanvas() error {
 func getCanvasFromDB() ([][]Pixel, error) {
 	db, err := database.New("/canvas")
 	if err != nil {
-		fmt.Printf("Error creating canvas database: %v\n", err)
 		return nil, err
 	}
 
+	// Try to get existing canvas
 	data, err := db.Get("canvas")
 	if err != nil {
-		fmt.Printf("Canvas not found in database, initializing: %v\n", err)
-		// Initialize canvas if it doesn't exist
+		// Canvas doesn't exist, create it
 		if err := initCanvas(); err != nil {
-			fmt.Printf("Error initializing canvas: %v\n", err)
 			return nil, err
 		}
 		data, err = db.Get("canvas")
 		if err != nil {
-			fmt.Printf("Error getting canvas after initialization: %v\n", err)
 			return nil, err
 		}
 	}
 
+	// Unmarshal canvas data
 	var canvas [][]Pixel
 	if err := json.Unmarshal(data, &canvas); err != nil {
-		fmt.Printf("Error unmarshaling canvas data: %v\n", err)
-		// If unmarshaling fails, the canvas data might be corrupted
-		// Try to reinitialize the canvas
-		fmt.Printf("Attempting to reinitialize canvas due to corruption...\n")
+		// Data is corrupted, recreate canvas
 		if err := initCanvas(); err != nil {
 			return nil, err
 		}
@@ -238,30 +229,11 @@ func getCanvasFromDB() ([][]Pixel, error) {
 		}
 	}
 
-	// Validate canvas structure
-	if len(canvas) == 0 || len(canvas[0]) == 0 {
-		fmt.Printf("Canvas has invalid dimensions, reinitializing...\n")
-		if err := initCanvas(); err != nil {
-			return nil, err
-		}
-		data, err = db.Get("canvas")
-		if err != nil {
-			return nil, err
-		}
-		if err := json.Unmarshal(data, &canvas); err != nil {
-			return nil, err
-		}
-	}
-
-	// Ensure all pixels have proper coordinates
-	for y := range canvas {
-		for x := range canvas[y] {
-			if canvas[y][x].X != x || canvas[y][x].Y != y {
-				canvas[y][x].X = x
-				canvas[y][x].Y = y
-			}
-		}
-	}
+	// Update cache
+	cacheMutex.Lock()
+	canvasCache = canvas
+	cacheValid = true
+	cacheMutex.Unlock()
 
 	return canvas, nil
 }
@@ -444,7 +416,6 @@ func publishChatMessage(message ChatMessage) error {
 func getCanvas(e event.Event) uint32 {
 	h, err := e.HTTP()
 	if err != nil {
-		fmt.Printf("Error getting HTTP event: %v\n", err)
 		return 1
 	}
 
@@ -458,41 +429,18 @@ func getCanvas(e event.Event) uint32 {
 			h.Write(canvasData)
 			h.Return(200)
 			return 0
-		} else {
-			fmt.Printf("Error marshaling cached canvas: %v\n", err)
 		}
-	} else {
-		fmt.Printf("Cache not valid or empty, cacheValid: %v, cacheLen: %d\n", cacheValid, len(canvasCache))
 	}
 	cacheMutex.RUnlock()
 
-	// Fallback to database
-	fmt.Printf("Fetching canvas from database...\n")
+	// Get from database
 	canvas, err := getCanvasFromDB()
 	if err != nil {
-		fmt.Printf("Error getting canvas from DB: %v\n", err)
-		// Create a simple fallback canvas to prevent crashes
-		fmt.Printf("Creating fallback canvas...\n")
-		canvas = make([][]Pixel, CanvasHeight)
-		for y := range canvas {
-			canvas[y] = make([]Pixel, CanvasWidth)
-			for x := range canvas[y] {
-				canvas[y][x] = Pixel{
-					X:         x,
-					Y:         y,
-					Color:     "#ffffff",
-					UserID:    "",
-					Username:  "",
-					Timestamp: 0,
-				}
-			}
-		}
+		return fail(h, err, 500)
 	}
 
-	fmt.Printf("Canvas loaded from DB, size: %dx%d\n", len(canvas), len(canvas[0]))
 	canvasData, err := json.Marshal(canvas)
 	if err != nil {
-		fmt.Printf("Error marshaling canvas: %v\n", err)
 		return fail(h, err, 500)
 	}
 
