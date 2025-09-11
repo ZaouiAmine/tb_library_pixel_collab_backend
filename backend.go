@@ -3,6 +3,8 @@ package lib
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -86,6 +88,47 @@ func fail(h http.Event, err error, code int) uint32 {
 
 func isValidPixel(x, y int) bool {
 	return x >= 0 && x < CanvasWidth && y >= 0 && y < CanvasHeight
+}
+
+func isValidUsername(username string) bool {
+	// Username must be 3-20 characters, alphanumeric and underscores only
+	if len(username) < 3 || len(username) > 20 {
+		return false
+	}
+	for _, char := range username {
+		if !((char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') ||
+			(char >= '0' && char <= '9') || char == '_') {
+			return false
+		}
+	}
+	return true
+}
+
+func isValidColor(color string) bool {
+	// Must be a valid hex color
+	if len(color) != 7 || color[0] != '#' {
+		return false
+	}
+	for i := 1; i < 7; i++ {
+		char := color[i]
+		if !((char >= '0' && char <= '9') || (char >= 'a' && char <= 'f') || (char >= 'A' && char <= 'F')) {
+			return false
+		}
+	}
+	return true
+}
+
+func sanitizeMessage(message string) string {
+	// Basic XSS protection - remove script tags and dangerous characters
+	// In a real application, you'd use a proper HTML sanitizer
+	if len(message) > 500 {
+		message = message[:500]
+	}
+	// Remove potential script tags
+	message = strings.ReplaceAll(message, "<script", "")
+	message = strings.ReplaceAll(message, "</script>", "")
+	message = strings.ReplaceAll(message, "javascript:", "")
+	return message
 }
 
 func generateMessageID() string {
@@ -311,6 +354,10 @@ func getChatMessagesFromDB() ([]ChatMessage, error) {
 	}
 
 	// Sort by timestamp (newest first) and limit
+	sort.Slice(messages, func(i, j int) bool {
+		return messages[i].Timestamp > messages[j].Timestamp
+	})
+
 	if len(messages) > MaxMessages {
 		messages = messages[:MaxMessages]
 	}
@@ -616,6 +663,12 @@ func onPixelUpdate(e event.Event) uint32 {
 		return 1
 	}
 
+	// Validate color
+	if !isValidColor(pixel.Color) {
+		fmt.Printf("Invalid color: %s\n", pixel.Color)
+		return 1
+	}
+
 	// Validate user exists and is online
 	db, err := database.New("/users")
 	if err != nil {
@@ -712,6 +765,12 @@ func onUserUpdate(e event.Event) uint32 {
 		return 1
 	}
 
+	// Validate username format
+	if !isValidUsername(user.Username) {
+		fmt.Printf("Invalid username format: %s\n", user.Username)
+		return 1
+	}
+
 	// Save user to database
 	if err := saveUserToDB(user); err != nil {
 		fmt.Printf("Error saving user to database: %v\n", err)
@@ -749,6 +808,19 @@ func onChatMessage(e event.Event) uint32 {
 	// Validate message data
 	if message.UserID == "" || message.Username == "" || message.Message == "" {
 		fmt.Printf("Invalid chat message: missing required fields\n")
+		return 1
+	}
+
+	// Validate username format
+	if !isValidUsername(message.Username) {
+		fmt.Printf("Invalid username format in chat message: %s\n", message.Username)
+		return 1
+	}
+
+	// Sanitize message content
+	message.Message = sanitizeMessage(message.Message)
+	if message.Message == "" {
+		fmt.Printf("Message was empty after sanitization\n")
 		return 1
 	}
 
