@@ -69,13 +69,13 @@ func getPixelChannelURL(e event.Event) uint32 {
 	if err != nil {
 		return fail(h, err, 500)
 	}
-
+	channel.Subscribe()
 	// get the websocket url
 	url, err := channel.WebSocket().Url()
 	if err != nil {
 		return fail(h, err, 500)
 	}
-
+	fmt.Println("pixelchannel..........................")
 	// Return the WebSocket path directly as a string
 	h.Headers().Set("Content-Type", "text/plain")
 	h.Write([]byte(url.Path))
@@ -96,7 +96,7 @@ func getChatChannelURL(e event.Event) uint32 {
 	if err != nil {
 		return fail(h, err, 500)
 	}
-
+	channel.Subscribe()
 	// get the websocket url
 	url, err := channel.WebSocket().Url()
 	if err != nil {
