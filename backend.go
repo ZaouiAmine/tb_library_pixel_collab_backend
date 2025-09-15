@@ -4,6 +4,8 @@ import (
 	"crypto/md5"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
+	"time"
 
 	"github.com/taubyte/go-sdk/database"
 	"github.com/taubyte/go-sdk/event"
@@ -153,42 +155,37 @@ func getWebSocketURL(e event.Event) uint32 {
 		return 1
 	}
 
+	// get room from query
 	room, err := h.Query().Get("room")
-	if err != nil {
-		room = "pixelupdates"
-	}
-
-	hash := md5.New()
-	hash.Write([]byte(room))
-	roomHash := hex.EncodeToString(hash.Sum(nil))
-
-	channel, err := pubsub.Channel("pixel" + roomHash)
 	if err != nil {
 		return fail(h, err, 500)
 	}
 
+	// hash the room to create a channel name
+	hash := md5.New()
+	hash.Write([]byte(room))
+	roomHash := hex.EncodeToString(hash.Sum(nil))
+
+	// create/open a channel with the hash
+	channel, err := pubsub.Channel("pixel-" + roomHash)
+	if err != nil {
+		return fail(h, err, 500)
+	}
+
+	// get the websocket url
 	url, err := channel.WebSocket().Url()
 	if err != nil {
 		return fail(h, err, 500)
 	}
 
-	response := map[string]string{
-		"websocket_url": url.Path,
-	}
+	// write the url to the response
+	h.Write([]byte(url.Path))
 
-	jsonData, err := json.Marshal(response)
-	if err != nil {
-		return fail(h, err, 500)
-	}
-
-	h.Headers().Set("Content-Type", "application/json")
-	h.Write(jsonData)
-	h.Return(200)
 	return 0
 }
 
-//export resetCanvas
-func resetCanvas(e event.Event) uint32 {
+//export initCanvas
+func initCanvas(e event.Event) uint32 {
 	h, err := e.HTTP()
 	if err != nil {
 		return 1
@@ -224,5 +221,179 @@ func resetCanvas(e event.Event) uint32 {
 
 	h.Write([]byte("Canvas reset"))
 	h.Return(200)
+	return 0
+}
+
+//export onPixelUpdate
+func onPixelUpdate(e event.Event) uint32 {
+	channel, err := e.PubSub()
+	if err != nil {
+		return 1
+	}
+
+	data, err := channel.Data()
+	if err != nil {
+		return 1
+	}
+
+	var pixel Pixel
+	err = json.Unmarshal(data, &pixel)
+	if err != nil {
+		return 1
+	}
+
+	// Load current canvas
+	db, err := database.New("/canvas")
+	if err != nil {
+		return 1
+	}
+
+	canvasData, err := db.Get("data")
+	if err != nil {
+		return 1
+	}
+
+	var canvas [][]Pixel
+	err = json.Unmarshal(canvasData, &canvas)
+	if err != nil {
+		return 1
+	}
+
+	// Update canvas
+	if pixel.X >= 0 && pixel.X < CanvasWidth && pixel.Y >= 0 && pixel.Y < CanvasHeight {
+		canvas[pixel.Y][pixel.X] = pixel
+
+		// Save updated canvas
+		updatedData, err := json.Marshal(canvas)
+		if err != nil {
+			return 1
+		}
+		err = db.Put("data", updatedData)
+		if err != nil {
+			return 1
+		}
+	}
+
+	return 0
+}
+
+//export onUserUpdate
+func onUserUpdate(e event.Event) uint32 {
+	channel, err := e.PubSub()
+	if err != nil {
+		return 1
+	}
+
+	data, err := channel.Data()
+	if err != nil {
+		return 1
+	}
+
+	var user User
+	err = json.Unmarshal(data, &user)
+	if err != nil {
+		return 1
+	}
+
+	// Load current users
+	db, err := database.New("/users")
+	if err != nil {
+		return 1
+	}
+
+	usersData, err := db.Get("data")
+	if err != nil {
+		// If no data exists, create empty array
+		usersData = []byte("[]")
+	}
+
+	var users []User
+	err = json.Unmarshal(usersData, &users)
+	if err != nil {
+		users = []User{}
+	}
+
+	// Update users list
+	found := false
+	for i, u := range users {
+		if u.ID == user.ID {
+			users[i] = user
+			found = true
+			break
+		}
+	}
+	if !found {
+		users = append(users, user)
+	}
+
+	// Save updated users
+	updatedData, err := json.Marshal(users)
+	if err != nil {
+		return 1
+	}
+	err = db.Put("data", updatedData)
+	if err != nil {
+		return 1
+	}
+
+	return 0
+}
+
+//export onChatMessage
+func onChatMessage(e event.Event) uint32 {
+	channel, err := e.PubSub()
+	if err != nil {
+		return 1
+	}
+
+	data, err := channel.Data()
+	if err != nil {
+		return 1
+	}
+
+	var message ChatMessage
+	err = json.Unmarshal(data, &message)
+	if err != nil {
+		return 1
+	}
+
+	// Load current messages
+	db, err := database.New("/chat")
+	if err != nil {
+		return 1
+	}
+
+	messagesData, err := db.Get("data")
+	if err != nil {
+		// If no data exists, create empty array
+		messagesData = []byte("[]")
+	}
+
+	var messages []ChatMessage
+	err = json.Unmarshal(messagesData, &messages)
+	if err != nil {
+		messages = []ChatMessage{}
+	}
+
+	// Add message
+	message.ID = fmt.Sprintf("%d", time.Now().UnixNano())
+	message.Timestamp = time.Now().Unix()
+	messages = append(messages, message)
+
+	// Keep only last 100 messages
+	if len(messages) > 100 {
+		messages = messages[len(messages)-100:]
+	}
+
+	// Save updated messages
+	updatedData, err := json.Marshal(messages)
+	if err != nil {
+		return 1
+	}
+	err = db.Put("data", updatedData)
+	if err != nil {
+		return 1
+	}
+
 	return 0
 }
