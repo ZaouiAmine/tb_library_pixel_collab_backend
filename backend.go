@@ -352,3 +352,182 @@ func onChatMessage(e event.Event) uint32 {
 
 	return 0
 }
+
+//export sendPixel
+func sendPixel(e event.Event) uint32 {
+	h, err := e.HTTP()
+	if err != nil {
+		return 1
+	}
+	setCORSHeaders(h)
+
+	// Read the request body
+	body := h.Body()
+	bodyData := make([]byte, 1024)
+	n, err := body.Read(bodyData)
+	if err != nil {
+		return fail(h, err, 400)
+	}
+	bodyData = bodyData[:n]
+
+	var pixelUpdate struct {
+		X        int    `json:"x"`
+		Y        int    `json:"y"`
+		Color    string `json:"color"`
+		UserID   string `json:"userId"`
+		Username string `json:"username"`
+		Room     string `json:"room"`
+	}
+
+	err = json.Unmarshal(bodyData, &pixelUpdate)
+	if err != nil {
+		return fail(h, err, 400)
+	}
+
+	// Use room from message
+	room := pixelUpdate.Room
+	if room == "" {
+		room = "default"
+	}
+
+	// Update canvas in database
+	db, err := database.New("/canvas")
+	if err != nil {
+		return fail(h, err, 500)
+	}
+
+	canvasKey := "room:" + room
+	canvasData, err := db.Get(canvasKey)
+	if err != nil {
+		// If no canvas exists, create empty canvas
+		canvas := make([][]string, CanvasHeight)
+		for y := 0; y < CanvasHeight; y++ {
+			canvas[y] = make([]string, CanvasWidth)
+			for x := 0; x < CanvasWidth; x++ {
+				canvas[y][x] = "#ffffff"
+			}
+		}
+		canvasData, _ = json.Marshal(canvas)
+		db.Put(canvasKey, canvasData)
+	}
+
+	var canvas [][]string
+	err = json.Unmarshal(canvasData, &canvas)
+	if err != nil {
+		return fail(h, err, 500)
+	}
+
+	// Update pixel
+	if pixelUpdate.X >= 0 && pixelUpdate.X < CanvasWidth &&
+		pixelUpdate.Y >= 0 && pixelUpdate.Y < CanvasHeight {
+		canvas[pixelUpdate.Y][pixelUpdate.X] = pixelUpdate.Color
+
+		// Save updated canvas
+		updatedData, err := json.Marshal(canvas)
+		if err != nil {
+			return fail(h, err, 500)
+		}
+		err = db.Put(canvasKey, updatedData)
+		if err != nil {
+			return fail(h, err, 500)
+		}
+
+		// Publish to channel to trigger onPixelUpdate function
+		pixelChannel, err := pubsub.Channel("pixelupdates")
+		if err == nil {
+			pixelData, _ := json.Marshal(pixelUpdate)
+			pixelChannel.Publish(pixelData)
+		}
+	}
+
+	h.Return(200)
+	return 0
+}
+
+//export sendMessage
+func sendMessage(e event.Event) uint32 {
+	h, err := e.HTTP()
+	if err != nil {
+		return 1
+	}
+	setCORSHeaders(h)
+
+	// Read the request body
+	body := h.Body()
+	bodyData := make([]byte, 1024)
+	n, err := body.Read(bodyData)
+	if err != nil {
+		return fail(h, err, 400)
+	}
+	bodyData = bodyData[:n]
+
+	var message struct {
+		Message  string `json:"message"`
+		UserID   string `json:"userId"`
+		Username string `json:"username"`
+		Room     string `json:"room"`
+	}
+	err = json.Unmarshal(bodyData, &message)
+	if err != nil {
+		return fail(h, err, 400)
+	}
+
+	// Use room from message
+	room := message.Room
+	if room == "" {
+		room = "default"
+	}
+
+	// Update messages in database
+	db, err := database.New("/chat")
+	if err != nil {
+		return fail(h, err, 500)
+	}
+
+	chatKey := "room:" + room
+	messagesData, err := db.Get(chatKey)
+	if err != nil {
+		messagesData = []byte("[]")
+	}
+
+	var messages []ChatMessage
+	err = json.Unmarshal(messagesData, &messages)
+	if err != nil {
+		messages = []ChatMessage{}
+	}
+
+	// Add message with timestamp
+	chatMessage := ChatMessage{
+		ID:        fmt.Sprintf("%d", time.Now().UnixNano()),
+		UserID:    message.UserID,
+		Username:  message.Username,
+		Message:   message.Message,
+		Timestamp: time.Now().Unix(),
+	}
+	messages = append(messages, chatMessage)
+
+	// Keep only last 100 messages
+	if len(messages) > 100 {
+		messages = messages[len(messages)-100:]
+	}
+
+	// Save updated messages
+	updatedData, err := json.Marshal(messages)
+	if err != nil {
+		return fail(h, err, 500)
+	}
+	err = db.Put(chatKey, updatedData)
+	if err != nil {
+		return fail(h, err, 500)
+	}
+
+	// Publish to channel to trigger onChatMessage function
+	chatChannel, err := pubsub.Channel("chatmessages")
+	if err == nil {
+		messageData, _ := json.Marshal(chatMessage)
+		chatChannel.Publish(messageData)
+	}
+
+	h.Return(200)
+	return 0
+}
