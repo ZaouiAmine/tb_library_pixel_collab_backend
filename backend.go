@@ -102,7 +102,7 @@ func getChatChannelURL(e event.Event) uint32 {
 	if err != nil {
 		return fail(h, err, 500)
 	}
-
+	fmt.Println("here................................")
 	// Return the WebSocket path directly as a string
 	h.Headers().Set("Content-Type", "text/plain")
 	h.Write([]byte(url.Path))
