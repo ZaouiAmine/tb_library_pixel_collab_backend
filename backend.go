@@ -35,8 +35,8 @@ type ChatMessage struct {
 }
 
 type Canvas struct {
-	Width  int     `json:"width"`
-	Height int     `json:"height"`
+	Width  int       `json:"width"`
+	Height int       `json:"height"`
 	Pixels [][]Pixel `json:"pixels"`
 }
 
@@ -48,9 +48,9 @@ const (
 
 // ===== GLOBAL STATE =====
 var (
-	canvas     [][]Pixel
-	users      []User
-	messages   []ChatMessage
+	canvas   [][]Pixel
+	users    []User
+	messages []ChatMessage
 )
 
 // ===== UTILITY FUNCTIONS =====
@@ -132,12 +132,19 @@ func init() {
 
 // ===== HTTP HANDLERS =====
 
+// Helper function to set headers properly
+func setHeaders(h event.HTTP) {
+	h.Headers().Set("Content-Type", "application/json")
+	h.Headers().Set("Access-Control-Allow-Origin", "*")
+	h.Headers().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+	h.Headers().Set("Access-Control-Allow-Headers", "Content-Type")
+}
+
 //export getCanvas
 func getCanvas(e event.Event) uint32 {
 	h, _ := e.HTTP()
-	h.Headers().Set("Content-Type", "application/json")
-	h.Headers().Set("Access-Control-Allow-Origin", "*")
-	
+	setHeaders(h)
+
 	data, _ := json.Marshal(canvas)
 	h.Write(data)
 	h.Return(200)
@@ -147,9 +154,8 @@ func getCanvas(e event.Event) uint32 {
 //export getUsers
 func getUsers(e event.Event) uint32 {
 	h, _ := e.HTTP()
-	h.Headers().Set("Content-Type", "application/json")
-	h.Headers().Set("Access-Control-Allow-Origin", "*")
-	
+	setHeaders(h)
+
 	data, _ := json.Marshal(users)
 	h.Write(data)
 	h.Return(200)
@@ -159,9 +165,8 @@ func getUsers(e event.Event) uint32 {
 //export getMessages
 func getMessages(e event.Event) uint32 {
 	h, _ := e.HTTP()
-	h.Headers().Set("Content-Type", "application/json")
-	h.Headers().Set("Access-Control-Allow-Origin", "*")
-	
+	setHeaders(h)
+
 	data, _ := json.Marshal(messages)
 	h.Write(data)
 	h.Return(200)
@@ -171,21 +176,20 @@ func getMessages(e event.Event) uint32 {
 //export getWebSocketURL
 func getWebSocketURL(e event.Event) uint32 {
 	h, _ := e.HTTP()
-	h.Headers().Set("Content-Type", "application/json")
-	h.Headers().Set("Access-Control-Allow-Origin", "*")
-	
+	setHeaders(h)
+
 	room, _ := h.Query().Get("room")
 	if room == "" {
 		room = "pixelupdates"
 	}
-	
+
 	channel, _ := pubsub.Channel(room)
 	wsURL, _ := channel.WebSocket().Url()
-	
+
 	response := map[string]string{
 		"websocket_url": wsURL.Path,
 	}
-	
+
 	data, _ := json.Marshal(response)
 	h.Write(data)
 	h.Return(200)
@@ -195,11 +199,11 @@ func getWebSocketURL(e event.Event) uint32 {
 //export initCanvas
 func initCanvas(e event.Event) uint32 {
 	h, _ := e.HTTP()
-	h.Headers().Set("Access-Control-Allow-Origin", "*")
-	
+	setHeaders(h)
+
 	canvas = createEmptyCanvas()
 	saveCanvas()
-	
+
 	h.Write([]byte("Canvas initialized"))
 	h.Return(200)
 	return 0
@@ -208,11 +212,11 @@ func initCanvas(e event.Event) uint32 {
 //export resetCanvas
 func resetCanvas(e event.Event) uint32 {
 	h, _ := e.HTTP()
-	h.Headers().Set("Access-Control-Allow-Origin", "*")
-	
+	setHeaders(h)
+
 	canvas = createEmptyCanvas()
 	saveCanvas()
-	
+
 	h.Write([]byte("Canvas reset"))
 	h.Return(200)
 	return 0
@@ -224,16 +228,16 @@ func resetCanvas(e event.Event) uint32 {
 func onPixelUpdate(e event.Event) uint32 {
 	channel, _ := e.PubSub()
 	data, _ := channel.Data()
-	
+
 	var pixel Pixel
 	json.Unmarshal(data, &pixel)
-	
+
 	// Update canvas
 	if pixel.X >= 0 && pixel.X < CanvasWidth && pixel.Y >= 0 && pixel.Y < CanvasHeight {
 		canvas[pixel.Y][pixel.X] = pixel
 		saveCanvas()
 	}
-	
+
 	return 0
 }
 
@@ -241,10 +245,10 @@ func onPixelUpdate(e event.Event) uint32 {
 func onUserUpdate(e event.Event) uint32 {
 	channel, _ := e.PubSub()
 	data, _ := channel.Data()
-	
+
 	var user User
 	json.Unmarshal(data, &user)
-	
+
 	// Update users list
 	found := false
 	for i, u := range users {
@@ -257,7 +261,7 @@ func onUserUpdate(e event.Event) uint32 {
 	if !found {
 		users = append(users, user)
 	}
-	
+
 	saveUsers()
 	return 0
 }
@@ -266,20 +270,20 @@ func onUserUpdate(e event.Event) uint32 {
 func onChatMessage(e event.Event) uint32 {
 	channel, _ := e.PubSub()
 	data, _ := channel.Data()
-	
+
 	var message ChatMessage
 	json.Unmarshal(data, &message)
-	
+
 	// Add message
 	message.ID = fmt.Sprintf("%d", time.Now().UnixNano())
 	message.Timestamp = time.Now().Unix()
 	messages = append(messages, message)
-	
+
 	// Keep only last 100 messages
 	if len(messages) > 100 {
 		messages = messages[len(messages)-100:]
 	}
-	
+
 	saveMessages()
 	return 0
 }
