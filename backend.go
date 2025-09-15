@@ -94,7 +94,12 @@ func loadCanvas() {
 		saveCanvas()
 		return
 	}
-	json.Unmarshal(data, &canvas)
+	err = json.Unmarshal(data, &canvas)
+	if err != nil {
+		canvas = createEmptyCanvas()
+		saveCanvas()
+		return
+	}
 }
 
 func saveUsers() {
@@ -114,7 +119,11 @@ func loadUsers() {
 		users = []User{}
 		return
 	}
-	json.Unmarshal(data, &users)
+	err = json.Unmarshal(data, &users)
+	if err != nil {
+		users = []User{}
+		return
+	}
 }
 
 func saveMessages() {
@@ -134,7 +143,11 @@ func loadMessages() {
 		messages = []ChatMessage{}
 		return
 	}
-	json.Unmarshal(data, &messages)
+	err = json.Unmarshal(data, &messages)
+	if err != nil {
+		messages = []ChatMessage{}
+		return
+	}
 }
 
 func init() {
