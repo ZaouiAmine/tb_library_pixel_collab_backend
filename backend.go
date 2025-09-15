@@ -237,7 +237,21 @@ func onPixelUpdate(e event.Event) uint32 {
 
 	canvasData, err := db.Get("data")
 	if err != nil {
-		return 1
+		// If no canvas exists, create empty canvas
+		canvas := make([][]Pixel, CanvasHeight)
+		for y := 0; y < CanvasHeight; y++ {
+			canvas[y] = make([]Pixel, CanvasWidth)
+			for x := 0; x < CanvasWidth; x++ {
+				canvas[y][x] = Pixel{
+					X:      x,
+					Y:      y,
+					Color:  "#ffffff",
+					UserID: "",
+				}
+			}
+		}
+		canvasData, _ = json.Marshal(canvas)
+		db.Put("data", canvasData)
 	}
 
 	var canvas [][]Pixel
@@ -383,4 +397,56 @@ func onChatMessage(e event.Event) uint32 {
 	}
 
 	return 0
+}
+
+//export onWebSocketMessage
+func onWebSocketMessage(e event.Event) uint32 {
+	channel, err := e.PubSub()
+	if err != nil {
+		return 1
+	}
+
+	data, err := channel.Data()
+	if err != nil {
+		return 1
+	}
+
+	// Try to parse as different message types
+	var pixel Pixel
+	if err := json.Unmarshal(data, &pixel); err == nil && pixel.X >= 0 && pixel.Y >= 0 {
+		// This is a pixel update - publish to pixelupdates channel
+		pixelChannel, err := pubsub.Channel("pixelupdates")
+		if err != nil {
+			return 1
+		}
+		pixelData, _ := json.Marshal(pixel)
+		pixelChannel.Publish(pixelData)
+		return 0
+	}
+
+	var user User
+	if err := json.Unmarshal(data, &user); err == nil && user.ID != "" {
+		// This is a user update - publish to userupdates channel
+		userChannel, err := pubsub.Channel("userupdates")
+		if err != nil {
+			return 1
+		}
+		userData, _ := json.Marshal(user)
+		userChannel.Publish(userData)
+		return 0
+	}
+
+	var message ChatMessage
+	if err := json.Unmarshal(data, &message); err == nil && message.Message != "" {
+		// This is a chat message - publish to chatmessages channel
+		chatChannel, err := pubsub.Channel("chatmessages")
+		if err != nil {
+			return 1
+		}
+		messageData, _ := json.Marshal(message)
+		chatChannel.Publish(messageData)
+		return 0
+	}
+
+	return 1
 }
