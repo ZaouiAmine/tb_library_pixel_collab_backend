@@ -54,9 +54,16 @@ var (
 )
 
 // ===== UTILITY FUNCTIONS =====
-func getDB() database.Database {
-	db, _ := database.New("/pixel_collab")
-	return db
+func getCanvasDB() (database.Database, error) {
+	return database.New("/canvas")
+}
+
+func getUsersDB() (database.Database, error) {
+	return database.New("/users")
+}
+
+func getChatDB() (database.Database, error) {
+	return database.New("/chat")
 }
 
 func createEmptyCanvas() [][]Pixel {
@@ -75,42 +82,56 @@ func createEmptyCanvas() [][]Pixel {
 	return canvas
 }
 
-func saveCanvas() {
-	db := getDB()
+func saveCanvas() error {
+	db, err := getCanvasDB()
+	if err != nil {
+		return err
+	}
 	data, _ := json.Marshal(canvas)
-	db.Put("canvas", data)
+	return db.Put("data", data)
 }
 
 func loadCanvas() {
-	db := getDB()
-	data, err := db.Get("canvas")
+	db, err := getCanvasDB()
 	if err != nil {
 		canvas = createEmptyCanvas()
-		saveCanvas()
+		return
+	}
+	data, err := db.Get("data")
+	if err != nil {
+		canvas = createEmptyCanvas()
+		saveCanvas() // Ignore error
 		return
 	}
 	if len(data) == 0 {
 		canvas = createEmptyCanvas()
-		saveCanvas()
+		saveCanvas() // Ignore error
 		return
 	}
 	err = json.Unmarshal(data, &canvas)
 	if err != nil {
 		canvas = createEmptyCanvas()
-		saveCanvas()
+		saveCanvas() // Ignore error
 		return
 	}
 }
 
-func saveUsers() {
-	db := getDB()
+func saveUsers() error {
+	db, err := getUsersDB()
+	if err != nil {
+		return err
+	}
 	data, _ := json.Marshal(users)
-	db.Put("users", data)
+	return db.Put("data", data)
 }
 
 func loadUsers() {
-	db := getDB()
-	data, err := db.Get("users")
+	db, err := getUsersDB()
+	if err != nil {
+		users = []User{}
+		return
+	}
+	data, err := db.Get("data")
 	if err != nil {
 		users = []User{}
 		return
@@ -126,15 +147,22 @@ func loadUsers() {
 	}
 }
 
-func saveMessages() {
-	db := getDB()
+func saveMessages() error {
+	db, err := getChatDB()
+	if err != nil {
+		return err
+	}
 	data, _ := json.Marshal(messages)
-	db.Put("messages", data)
+	return db.Put("data", data)
 }
 
 func loadMessages() {
-	db := getDB()
-	data, err := db.Get("messages")
+	db, err := getChatDB()
+	if err != nil {
+		messages = []ChatMessage{}
+		return
+	}
+	data, err := db.Get("data")
 	if err != nil {
 		messages = []ChatMessage{}
 		return
@@ -150,16 +178,22 @@ func loadMessages() {
 	}
 }
 
-func init() {
-	loadCanvas()
-	loadUsers()
-	loadMessages()
+var initialized bool
+
+func ensureInitialized() {
+	if !initialized {
+		loadCanvas()
+		loadUsers()
+		loadMessages()
+		initialized = true
+	}
 }
 
 // ===== HTTP HANDLERS =====
 
 //export getCanvas
 func getCanvas(e event.Event) uint32 {
+	ensureInitialized()
 	h, _ := e.HTTP()
 	h.Headers().Set("Content-Type", "application/json")
 	h.Headers().Set("Access-Control-Allow-Origin", "*")
@@ -172,6 +206,7 @@ func getCanvas(e event.Event) uint32 {
 
 //export getUsers
 func getUsers(e event.Event) uint32 {
+	ensureInitialized()
 	h, _ := e.HTTP()
 	h.Headers().Set("Content-Type", "application/json")
 	h.Headers().Set("Access-Control-Allow-Origin", "*")
@@ -184,6 +219,7 @@ func getUsers(e event.Event) uint32 {
 
 //export getMessages
 func getMessages(e event.Event) uint32 {
+	ensureInitialized()
 	h, _ := e.HTTP()
 	h.Headers().Set("Content-Type", "application/json")
 	h.Headers().Set("Access-Control-Allow-Origin", "*")
@@ -224,7 +260,7 @@ func initCanvas(e event.Event) uint32 {
 	h.Headers().Set("Access-Control-Allow-Origin", "*")
 
 	canvas = createEmptyCanvas()
-	saveCanvas()
+	saveCanvas() // Ignore error
 
 	h.Write([]byte("Canvas initialized"))
 	h.Return(200)
@@ -237,7 +273,7 @@ func resetCanvas(e event.Event) uint32 {
 	h.Headers().Set("Access-Control-Allow-Origin", "*")
 
 	canvas = createEmptyCanvas()
-	saveCanvas()
+	saveCanvas() // Ignore error
 
 	h.Write([]byte("Canvas reset"))
 	h.Return(200)
@@ -257,7 +293,7 @@ func onPixelUpdate(e event.Event) uint32 {
 	// Update canvas
 	if pixel.X >= 0 && pixel.X < CanvasWidth && pixel.Y >= 0 && pixel.Y < CanvasHeight {
 		canvas[pixel.Y][pixel.X] = pixel
-		saveCanvas()
+		saveCanvas() // Ignore error
 	}
 
 	return 0
@@ -284,7 +320,7 @@ func onUserUpdate(e event.Event) uint32 {
 		users = append(users, user)
 	}
 
-	saveUsers()
+	saveUsers() // Ignore error
 	return 0
 }
 
@@ -306,6 +342,6 @@ func onChatMessage(e event.Event) uint32 {
 		messages = messages[len(messages)-100:]
 	}
 
-	saveMessages()
+	saveMessages() // Ignore error
 	return 0
 }
