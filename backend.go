@@ -132,18 +132,11 @@ func init() {
 
 // ===== HTTP HANDLERS =====
 
-// Helper function to set headers properly
-func setHeaders(h event.HTTP) {
-	h.Headers().Set("Content-Type", "application/json")
-	h.Headers().Set("Access-Control-Allow-Origin", "*")
-	h.Headers().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-	h.Headers().Set("Access-Control-Allow-Headers", "Content-Type")
-}
-
 //export getCanvas
 func getCanvas(e event.Event) uint32 {
 	h, _ := e.HTTP()
-	setHeaders(h)
+	h.Headers().Set("Content-Type", "application/json")
+	h.Headers().Set("Access-Control-Allow-Origin", "*")
 
 	data, _ := json.Marshal(canvas)
 	h.Write(data)
@@ -154,7 +147,8 @@ func getCanvas(e event.Event) uint32 {
 //export getUsers
 func getUsers(e event.Event) uint32 {
 	h, _ := e.HTTP()
-	setHeaders(h)
+	h.Headers().Set("Content-Type", "application/json")
+	h.Headers().Set("Access-Control-Allow-Origin", "*")
 
 	data, _ := json.Marshal(users)
 	h.Write(data)
@@ -165,7 +159,8 @@ func getUsers(e event.Event) uint32 {
 //export getMessages
 func getMessages(e event.Event) uint32 {
 	h, _ := e.HTTP()
-	setHeaders(h)
+	h.Headers().Set("Content-Type", "application/json")
+	h.Headers().Set("Access-Control-Allow-Origin", "*")
 
 	data, _ := json.Marshal(messages)
 	h.Write(data)
@@ -176,7 +171,8 @@ func getMessages(e event.Event) uint32 {
 //export getWebSocketURL
 func getWebSocketURL(e event.Event) uint32 {
 	h, _ := e.HTTP()
-	setHeaders(h)
+	h.Headers().Set("Content-Type", "application/json")
+	h.Headers().Set("Access-Control-Allow-Origin", "*")
 
 	room, _ := h.Query().Get("room")
 	if room == "" {
@@ -199,7 +195,7 @@ func getWebSocketURL(e event.Event) uint32 {
 //export initCanvas
 func initCanvas(e event.Event) uint32 {
 	h, _ := e.HTTP()
-	setHeaders(h)
+	h.Headers().Set("Access-Control-Allow-Origin", "*")
 
 	canvas = createEmptyCanvas()
 	saveCanvas()
@@ -212,7 +208,7 @@ func initCanvas(e event.Event) uint32 {
 //export resetCanvas
 func resetCanvas(e event.Event) uint32 {
 	h, _ := e.HTTP()
-	setHeaders(h)
+	h.Headers().Set("Access-Control-Allow-Origin", "*")
 
 	canvas = createEmptyCanvas()
 	saveCanvas()
