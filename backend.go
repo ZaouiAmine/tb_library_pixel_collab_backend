@@ -232,11 +232,9 @@ func getWebSocketURL(e event.Event) uint32 {
 		return fail(h, err, 500)
 	}
 
-	// Return the URL in JSON format
-	response := map[string]string{"url": url.Path}
-	jsonResponse, _ := json.Marshal(response)
-	h.Headers().Set("Content-Type", "application/json")
-	h.Write(jsonResponse)
+	// Return the WebSocket path directly as a string
+	h.Headers().Set("Content-Type", "text/plain")
+	h.Write([]byte(url.Path))
 	h.Return(200)
 	return 0
 }
