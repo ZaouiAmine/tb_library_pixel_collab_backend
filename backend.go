@@ -89,6 +89,11 @@ func loadCanvas() {
 		saveCanvas()
 		return
 	}
+	if len(data) == 0 {
+		canvas = createEmptyCanvas()
+		saveCanvas()
+		return
+	}
 	json.Unmarshal(data, &canvas)
 }
 
@@ -105,6 +110,10 @@ func loadUsers() {
 		users = []User{}
 		return
 	}
+	if len(data) == 0 {
+		users = []User{}
+		return
+	}
 	json.Unmarshal(data, &users)
 }
 
@@ -118,6 +127,10 @@ func loadMessages() {
 	db := getDB()
 	data, err := db.Get("messages")
 	if err != nil {
+		messages = []ChatMessage{}
+		return
+	}
+	if len(data) == 0 {
 		messages = []ChatMessage{}
 		return
 	}
