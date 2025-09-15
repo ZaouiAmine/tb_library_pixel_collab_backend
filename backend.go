@@ -1,8 +1,6 @@
 package lib
 
 import (
-	"crypto/md5"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -50,6 +48,12 @@ func fail(h http.Event, err error, code int) uint32 {
 	return 1
 }
 
+func setCORSHeaders(h http.Event) {
+	h.Headers().Set("Access-Control-Allow-Origin", "*")
+	h.Headers().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+	h.Headers().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+}
+
 // ===== HTTP HANDLERS =====
 
 //export getPixelChannelURL
@@ -58,20 +62,10 @@ func getPixelChannelURL(e event.Event) uint32 {
 	if err != nil {
 		return 1
 	}
+	setCORSHeaders(h)
 
-	// get room from query
-	room, err := h.Query().Get("room")
-	if err != nil {
-		return fail(h, err, 500)
-	}
-
-	// hash the room to create a channel name
-	hash := md5.New()
-	hash.Write([]byte(room))
-	roomHash := hex.EncodeToString(hash.Sum(nil))
-
-	// create/open pixel channel with the hash
-	channel, err := pubsub.Channel("pixelchannel-" + roomHash)
+	// create/open pixel channel with fixed name
+	channel, err := pubsub.Channel("pixelupdates")
 	if err != nil {
 		return fail(h, err, 500)
 	}
@@ -95,20 +89,10 @@ func getChatChannelURL(e event.Event) uint32 {
 	if err != nil {
 		return 1
 	}
+	setCORSHeaders(h)
 
-	// get room from query
-	room, err := h.Query().Get("room")
-	if err != nil {
-		return fail(h, err, 500)
-	}
-
-	// hash the room to create a channel name
-	hash := md5.New()
-	hash.Write([]byte(room))
-	roomHash := hex.EncodeToString(hash.Sum(nil))
-
-	// create/open chat channel with the hash
-	channel, err := pubsub.Channel("chatchannel-" + roomHash)
+	// create/open chat channel with fixed name
+	channel, err := pubsub.Channel("chatmessages")
 	if err != nil {
 		return fail(h, err, 500)
 	}
@@ -132,6 +116,7 @@ func getCanvas(e event.Event) uint32 {
 	if err != nil {
 		return 1
 	}
+	setCORSHeaders(h)
 
 	// get room from query
 	room, err := h.Query().Get("room")
@@ -176,6 +161,7 @@ func getMessages(e event.Event) uint32 {
 	if err != nil {
 		return 1
 	}
+	setCORSHeaders(h)
 
 	// get room from query
 	room, err := h.Query().Get("room")
@@ -233,8 +219,7 @@ func onPixelUpdate(e event.Event) uint32 {
 		return 1
 	}
 
-	// Extract room from channel name (pixelchannel-{hash})
-	// For simplicity, we'll use the room from the message
+	// Use room from message
 	room := pixelUpdate.Room
 	if room == "" {
 		room = "default"
@@ -280,6 +265,13 @@ func onPixelUpdate(e event.Event) uint32 {
 		err = db.Put(canvasKey, updatedData)
 		if err != nil {
 			return 1
+		}
+
+		// Broadcast pixel update to all connected clients via WebSocket
+		pixelChannel, err := pubsub.Channel("pixelupdates")
+		if err == nil {
+			pixelData, _ := json.Marshal(pixelUpdate)
+			pixelChannel.Publish(pixelData)
 		}
 	}
 
@@ -349,6 +341,13 @@ func onChatMessage(e event.Event) uint32 {
 	err = db.Put(chatKey, updatedData)
 	if err != nil {
 		return 1
+	}
+
+	// Broadcast chat message to all connected clients via WebSocket
+	chatChannel, err := pubsub.Channel("chatmessages")
+	if err == nil {
+		messageData, _ := json.Marshal(message.ChatMessage)
+		chatChannel.Publish(messageData)
 	}
 
 	return 0
