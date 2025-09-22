@@ -469,7 +469,7 @@ func onPixelUpdate(e event.Event) uint32 {
 	return 0
 }
 
-//export onChatMessage
+//export onChatMessages
 func onChatMessages(e event.Event) uint32 {
 	fmt.Println("💬 [onChatMessage] ===== CHAT MESSAGE HANDLER TRIGGERED =====")
 	fmt.Printf("📊 [onChatMessage] Event type: %T\n", e)
