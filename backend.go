@@ -210,10 +210,17 @@ func onPixelUpdate(e event.Event) uint32 {
 		return 1
 	}
 
-	fmt.Println("Raw channel data type:", fmt.Sprintf("%T", data))
-	fmt.Println("Raw channel data length:", len(data))
-	fmt.Println("Raw channel data bytes:", data)
-	fmt.Println("Received pixel data as string:", string(data))
+	//fmt.Println("Raw channel data type:", fmt.Sprintf("%T", data))
+	//fmt.Println("Raw channel data length:", len(data))
+	//fmt.Println("Raw channel data bytes:", data)
+	//fmt.Println("Received pixel data as string:", string(data))
+	fmt.Println("on pixel update triggered")
+	fmt.Println("on pixel update triggered")
+	fmt.Println("on pixel update triggered")
+	fmt.Println("on pixel update triggered")
+	fmt.Println("on pixel update triggered")
+	fmt.Println("on pixel update triggered")
+	fmt.Println("on pixel update triggered")
 
 	var pixelUpdate struct {
 		X        int    `json:"x"`
