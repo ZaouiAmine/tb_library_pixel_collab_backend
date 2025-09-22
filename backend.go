@@ -299,7 +299,7 @@ func onPixelUpdate(e event.Event) uint32 {
 }
 
 //export onChatMessage
-func onChatMessage(e event.Event) uint32 {
+func onChatMessages(e event.Event) uint32 {
 	fmt.Println("=== onChatMessage triggered ===")
 	fmt.Println("Event type:", fmt.Sprintf("%T", e))
 
