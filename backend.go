@@ -242,6 +242,7 @@ func getCanvas(e event.Event) uint32 {
 	// Open canvas database
 	fmt.Println("💾 [getCanvas] Opening canvas database")
 	db, err := database.New("/canvas")
+
 	if err != nil {
 		fmt.Printf("❌ [getCanvas] Error opening database: %v\n", err)
 		return fail(h, err, 500)
@@ -286,7 +287,13 @@ func clearCanvas(e event.Event) uint32 {
 	}
 	setCORSHeaders(h)
 
-	// Delete all canvas data
+	// Get room parameter from query (same logic as other functions)
+	room, err := h.Query().Get("room")
+	if err != nil || room == "" {
+		room = "default"
+	}
+
+	// Open canvas database
 	db, err := database.New("/canvas")
 	if err != nil {
 		h.Write([]byte(fmt.Sprintf("Error: %v", err)))
@@ -295,11 +302,16 @@ func clearCanvas(e event.Event) uint32 {
 	}
 	defer db.Close()
 
-	// Delete both possible room keys
-	db.Delete("room:main")    // Frontend sends this
-	db.Delete("room:default") // Backend defaults to this
+	// Delete canvas data for the room
+	canvasKey := "room:" + room
+	err = db.Delete(canvasKey)
+	if err != nil {
+		h.Write([]byte(fmt.Sprintf("Error: %v", err)))
+		h.Return(500)
+		return 1
+	}
 
-	h.Write([]byte("Canvas cleared"))
+	h.Write([]byte(fmt.Sprintf("Canvas cleared for room: %s", room)))
 	h.Return(200)
 	return 0
 }
@@ -312,7 +324,13 @@ func clearChat(e event.Event) uint32 {
 	}
 	setCORSHeaders(h)
 
-	// Delete all chat data
+	// Get room parameter from query (same logic as other functions)
+	room, err := h.Query().Get("room")
+	if err != nil || room == "" {
+		room = "default"
+	}
+
+	// Open chat database
 	db, err := database.New("/chat")
 	if err != nil {
 		h.Write([]byte(fmt.Sprintf("Error: %v", err)))
@@ -321,11 +339,16 @@ func clearChat(e event.Event) uint32 {
 	}
 	defer db.Close()
 
-	// Delete both possible room keys
-	db.Delete("room:main")    // Frontend sends this
-	db.Delete("room:default") // Backend defaults to this
+	// Delete chat data for the room
+	chatKey := "room:" + room
+	err = db.Delete(chatKey)
+	if err != nil {
+		h.Write([]byte(fmt.Sprintf("Error: %v", err)))
+		h.Return(500)
+		return 1
+	}
 
-	h.Write([]byte("Chat cleared"))
+	h.Write([]byte(fmt.Sprintf("Chat cleared for room: %s", room)))
 	h.Return(200)
 	return 0
 }
