@@ -240,37 +240,23 @@ func clearCanvas(e event.Event) uint32 {
 	}
 	setCORSHeaders(h)
 
-	// Open canvas database
-	db, err := database.New("/canvas")
-	if err != nil {
-		h.Write([]byte(fmt.Sprintf("Error: %v", err)))
-		h.Return(500)
-		return 1
-	}
-	defer db.Close()
-
-	// Create white canvas
-	whiteCanvas := make([][]string, CanvasHeight)
-	for y := 0; y < CanvasHeight; y++ {
-		whiteCanvas[y] = make([]string, CanvasWidth)
-		for x := 0; x < CanvasWidth; x++ {
-			whiteCanvas[y][x] = "#ffffff" // White pixels
-		}
-	}
-
-	// Save white canvas to database
-	canvasData, err := json.Marshal(whiteCanvas)
+	// Delete canvas data using database ID
+	canvasDbId := uint32(0) // Canvas database ID
+	err = database.Database(canvasDbId).Delete("room:main")
 	if err != nil {
 		h.Write([]byte(fmt.Sprintf("Error: %v", err)))
 		h.Return(500)
 		return 1
 	}
 
-	// Save to both possible room keys
-	db.Put("room:main", canvasData)
-	db.Put("room:default", canvasData)
+	err = database.Database(canvasDbId).Delete("room:default")
+	if err != nil {
+		h.Write([]byte(fmt.Sprintf("Error: %v", err)))
+		h.Return(500)
+		return 1
+	}
 
-	h.Write([]byte("Canvas cleared - all pixels set to white"))
+	h.Write([]byte("Canvas cleared"))
 	h.Return(200)
 	return 0
 }
@@ -283,29 +269,23 @@ func clearChat(e event.Event) uint32 {
 	}
 	setCORSHeaders(h)
 
-	// Open chat database
-	db, err := database.New("/chat")
-	if err != nil {
-		h.Write([]byte(fmt.Sprintf("Error: %v", err)))
-		h.Return(500)
-		return 1
-	}
-	defer db.Close()
-
-	// Create empty messages array
-	emptyMessages := []ChatMessage{}
-	messagesData, err := json.Marshal(emptyMessages)
+	// Delete chat data using database ID
+	chatDbId := uint32(1) // Chat database ID
+	err = database.Database(chatDbId).Delete("room:main")
 	if err != nil {
 		h.Write([]byte(fmt.Sprintf("Error: %v", err)))
 		h.Return(500)
 		return 1
 	}
 
-	// Save empty messages to both possible room keys
-	db.Put("room:main", messagesData)
-	db.Put("room:default", messagesData)
+	err = database.Database(chatDbId).Delete("room:default")
+	if err != nil {
+		h.Write([]byte(fmt.Sprintf("Error: %v", err)))
+		h.Return(500)
+		return 1
+	}
 
-	h.Write([]byte("Chat cleared - all messages removed"))
+	h.Write([]byte("Chat cleared"))
 	h.Return(200)
 	return 0
 }
