@@ -360,6 +360,7 @@ func onPixelUpdate(e event.Event) uint32 {
 		Room      string  `json:"room"`
 		Timestamp int64   `json:"timestamp"`
 		BatchId   string  `json:"batchId"`
+		SourceId  string  `json:"sourceId"`
 	}
 
 	fmt.Println("🔍 [onPixelUpdate] Parsing pixel batch data")
@@ -369,8 +370,8 @@ func onPixelUpdate(e event.Event) uint32 {
 		return 1
 	}
 
-	fmt.Printf("✅ [onPixelUpdate] Successfully parsed batch: %d pixels, room='%s', timestamp=%d, batchId='%s'\n",
-		len(pixelBatch.Pixels), pixelBatch.Room, pixelBatch.Timestamp, pixelBatch.BatchId)
+	fmt.Printf("✅ [onPixelUpdate] Successfully parsed batch: %d pixels, room='%s', timestamp=%d, batchId='%s', sourceId='%s'\n",
+		len(pixelBatch.Pixels), pixelBatch.Room, pixelBatch.Timestamp, pixelBatch.BatchId, pixelBatch.SourceId)
 
 	// Check for duplicate batch processing (server-side deduplication)
 	if isBatchProcessed(pixelBatch.BatchId, pixelBatch.Timestamp) {
@@ -458,27 +459,8 @@ func onPixelUpdate(e event.Event) uint32 {
 		}
 		fmt.Printf("✅ [onPixelUpdate] Canvas saved successfully (%d bytes)\n", len(updatedData))
 
-		// Broadcast pixel batch to all connected clients via WebSocket
-		fmt.Println("📡 [onPixelUpdate] Broadcasting pixel updates to all clients")
-		pixelChannel, err := pubsub.Channel("pixelupdates")
-		if err == nil {
-			batchData := struct {
-				Pixels    []Pixel `json:"pixels"`
-				Room      string  `json:"room"`
-				Timestamp int64   `json:"timestamp"`
-				BatchId   string  `json:"batchId"`
-			}{
-				Pixels:    validPixels,
-				Room:      room,
-				Timestamp: pixelBatch.Timestamp,
-				BatchId:   pixelBatch.BatchId,
-			}
-			pixelData, _ := json.Marshal(batchData)
-			pixelChannel.Publish(pixelData)
-			fmt.Printf("📢 [onPixelUpdate] Successfully broadcasted %d pixels to all clients (batchId: %s)\n", len(validPixels), pixelBatch.BatchId)
-		} else {
-			fmt.Printf("❌ [onPixelUpdate] Error getting pixel channel for broadcast: %v\n", err)
-		}
+		// Note: No broadcasting - frontend sends directly to pub/sub for real-time updates
+		fmt.Println("✅ [onPixelUpdate] Pixel batch saved to database (no broadcasting needed)")
 	} else {
 		fmt.Println("⚠️ [onPixelUpdate] No valid pixels to process, skipping save and broadcast")
 	}
@@ -516,6 +498,7 @@ func onChatMessages(e event.Event) uint32 {
 		Room      string `json:"room"`
 		MessageID string `json:"messageId"`
 		Timestamp int64  `json:"timestamp"`
+		SourceId  string `json:"sourceId"`
 	}
 
 	fmt.Println("🔍 [onChatMessage] Parsing chat message data")
@@ -525,8 +508,8 @@ func onChatMessages(e event.Event) uint32 {
 		return 1
 	}
 
-	fmt.Printf("✅ [onChatMessage] Successfully parsed message: user='%s', message='%s', room='%s', messageId='%s', timestamp=%d\n",
-		message.Username, message.Message, message.Room, message.MessageID, message.Timestamp)
+	fmt.Printf("✅ [onChatMessage] Successfully parsed message: user='%s', message='%s', room='%s', messageId='%s', timestamp=%d, sourceId='%s'\n",
+		message.Username, message.Message, message.Room, message.MessageID, message.Timestamp, message.SourceId)
 
 	// Check for duplicate message processing (server-side deduplication)
 	if isMessageProcessed(message.MessageID, message.Timestamp) {
@@ -616,16 +599,8 @@ func onChatMessages(e event.Event) uint32 {
 	}
 	fmt.Printf("✅ [onChatMessage] Messages saved successfully (%d bytes)\n", len(updatedData))
 
-	// Broadcast chat message to all connected clients via WebSocket
-	fmt.Println("📡 [onChatMessage] Broadcasting message to all clients")
-	chatChannel, err := pubsub.Channel("chatmessages")
-	if err == nil {
-		messageData, _ := json.Marshal(chatMessage)
-		chatChannel.Publish(messageData)
-		fmt.Printf("📢 [onChatMessage] Successfully broadcasted message from '%s' to all clients\n", message.Username)
-	} else {
-		fmt.Printf("❌ [onChatMessage] Error getting chat channel for broadcast: %v\n", err)
-	}
+	// Note: No broadcasting - frontend sends directly to pub/sub for real-time updates
+	fmt.Println("✅ [onChatMessage] Chat message saved to database (no broadcasting needed)")
 
 	fmt.Println("🎉 [onChatMessage] ===== CHAT MESSAGE HANDLER COMPLETED =====")
 	return 0
