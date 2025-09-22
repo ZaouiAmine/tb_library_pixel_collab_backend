@@ -215,33 +215,26 @@ func onPixelUpdate(e event.Event) uint32 {
 	//fmt.Println("Raw channel data bytes:", data)
 	//fmt.Println("Received pixel data as string:", string(data))
 	fmt.Println("on pixel update triggered")
-	fmt.Println("on pixel update triggered")
-	fmt.Println("on pixel update triggered")
-	fmt.Println("on pixel update triggered")
-	fmt.Println("on pixel update triggered")
-	fmt.Println("on pixel update triggered")
-	fmt.Println("on pixel update triggered")
+	fmt.Println("=== onPixelUpdate triggered ===")
+	fmt.Println("Raw channel data:", string(data))
 
-	var pixelUpdate struct {
-		X        int    `json:"x"`
-		Y        int    `json:"y"`
-		Color    string `json:"color"`
-		UserID   string `json:"userId"`
-		Username string `json:"username"`
-		Room     string `json:"room"`
+	var pixelBatch struct {
+		Pixels    []Pixel `json:"pixels"`
+		Room      string  `json:"room"`
+		Timestamp int64   `json:"timestamp"`
 	}
 
-	err = json.Unmarshal(data, &pixelUpdate)
+	err = json.Unmarshal(data, &pixelBatch)
 	if err != nil {
-		fmt.Println("Error parsing pixel data:", err)
+		fmt.Println("Error parsing pixel batch data:", err)
 		return 1
 	}
 
-	fmt.Printf("Parsed pixel: x=%d, y=%d, color=%s, room=%s\n",
-		pixelUpdate.X, pixelUpdate.Y, pixelUpdate.Color, pixelUpdate.Room)
+	fmt.Printf("Parsed pixel batch: %d pixels, room=%s, timestamp=%d\n",
+		len(pixelBatch.Pixels), pixelBatch.Room, pixelBatch.Timestamp)
 
 	// Use room from message
-	room := pixelUpdate.Room
+	room := pixelBatch.Room
 	if room == "" {
 		room = "default"
 	}
@@ -273,12 +266,21 @@ func onPixelUpdate(e event.Event) uint32 {
 		return 1
 	}
 
-	// Update pixel
-	if pixelUpdate.X >= 0 && pixelUpdate.X < CanvasWidth &&
-		pixelUpdate.Y >= 0 && pixelUpdate.Y < CanvasHeight {
-		canvas[pixelUpdate.Y][pixelUpdate.X] = pixelUpdate.Color
+	// Process each pixel in the batch
+	validPixels := []Pixel{}
+	for _, pixel := range pixelBatch.Pixels {
+		if pixel.X >= 0 && pixel.X < CanvasWidth &&
+			pixel.Y >= 0 && pixel.Y < CanvasHeight {
+			canvas[pixel.Y][pixel.X] = pixel.Color
+			validPixels = append(validPixels, pixel)
+			fmt.Printf("Updated pixel: x=%d, y=%d, color=%s\n", pixel.X, pixel.Y, pixel.Color)
+		} else {
+			fmt.Printf("Pixel coordinates out of bounds: x=%d, y=%d\n", pixel.X, pixel.Y)
+		}
+	}
 
-		// Save updated canvas
+	// Save updated canvas if we have valid pixels
+	if len(validPixels) > 0 {
 		updatedData, err := json.Marshal(canvas)
 		if err != nil {
 			return 1
@@ -288,17 +290,24 @@ func onPixelUpdate(e event.Event) uint32 {
 			return 1
 		}
 
-		// Broadcast pixel update to all connected clients via WebSocket
-		//pixelChannel, err := pubsub.Channel("pixelupdates")
-		//if err == nil {
-		//	pixelData, _ := json.Marshal(pixelUpdate)
-		//	pixelChannel.Publish(pixelData)
-		//	fmt.Println("Broadcasted pixel update to channel")
-		//} else {
-		//	fmt.Println("Error getting pixel channel for broadcast:", err)
-		//}
-	} else {
-		fmt.Println("Pixel coordinates out of bounds")
+		// Broadcast pixel batch to all connected clients via WebSocket
+		pixelChannel, err := pubsub.Channel("pixelupdates")
+		if err == nil {
+			batchData := struct {
+				Pixels    []Pixel `json:"pixels"`
+				Room      string  `json:"room"`
+				Timestamp int64   `json:"timestamp"`
+			}{
+				Pixels:    validPixels,
+				Room:      room,
+				Timestamp: pixelBatch.Timestamp,
+			}
+			pixelData, _ := json.Marshal(batchData)
+			pixelChannel.Publish(pixelData)
+			fmt.Printf("Broadcasted pixel batch with %d pixels to channel\n", len(validPixels))
+		} else {
+			fmt.Println("Error getting pixel channel for broadcast:", err)
+		}
 	}
 
 	fmt.Println("=== onPixelUpdate completed ===")
