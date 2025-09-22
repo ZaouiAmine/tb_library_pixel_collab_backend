@@ -41,11 +41,83 @@ const (
 	CanvasHeight = 90
 )
 
+// ===== DEDUPLICATION =====
+var processedBatchIds = make(map[string]int64)   // batchId -> timestamp
+var processedMessageIds = make(map[string]int64) // messageId -> timestamp
+const MAX_PROCESSED_BATCHES = 1000               // Keep last 1000 batch IDs
+const MAX_PROCESSED_MESSAGES = 1000              // Keep last 1000 message IDs
+
 // ===== UTILITY FUNCTIONS =====
 func fail(h http.Event, err error, code int) uint32 {
 	h.Write([]byte(err.Error()))
 	h.Return(code)
 	return 1
+}
+
+// Check if batch ID has already been processed (server-side deduplication)
+func isBatchProcessed(batchId string, timestamp int64) bool {
+	if batchId == "" {
+		return false // No batch ID means we can't deduplicate
+	}
+
+	// Check if we've seen this batch ID before
+	if existingTimestamp, exists := processedBatchIds[batchId]; exists {
+		fmt.Printf("🔄 [DEDUP] Batch ID '%s' already processed at timestamp %d, ignoring\n", batchId, existingTimestamp)
+		return true
+	}
+
+	// Add this batch ID to processed list
+	processedBatchIds[batchId] = timestamp
+	fmt.Printf("✅ [DEDUP] Batch ID '%s' marked as processed at timestamp %d\n", batchId, timestamp)
+
+	// Clean up old batch IDs to prevent memory leaks
+	if len(processedBatchIds) > MAX_PROCESSED_BATCHES {
+		// Remove oldest entries (simple cleanup - keep last 800)
+		count := 0
+		for batchId := range processedBatchIds {
+			delete(processedBatchIds, batchId)
+			count++
+			if count >= 200 { // Remove 200 oldest entries
+				break
+			}
+		}
+		fmt.Printf("🧹 [DEDUP] Cleaned up old batch IDs, remaining: %d\n", len(processedBatchIds))
+	}
+
+	return false
+}
+
+// Check if message ID has already been processed (server-side deduplication)
+func isMessageProcessed(messageId string, timestamp int64) bool {
+	if messageId == "" {
+		return false // No message ID means we can't deduplicate
+	}
+
+	// Check if we've seen this message ID before
+	if existingTimestamp, exists := processedMessageIds[messageId]; exists {
+		fmt.Printf("🔄 [DEDUP] Message ID '%s' already processed at timestamp %d, ignoring\n", messageId, existingTimestamp)
+		return true
+	}
+
+	// Add this message ID to processed list
+	processedMessageIds[messageId] = timestamp
+	fmt.Printf("✅ [DEDUP] Message ID '%s' marked as processed at timestamp %d\n", messageId, timestamp)
+
+	// Clean up old message IDs to prevent memory leaks
+	if len(processedMessageIds) > MAX_PROCESSED_MESSAGES {
+		// Remove oldest entries (simple cleanup - keep last 800)
+		count := 0
+		for messageId := range processedMessageIds {
+			delete(processedMessageIds, messageId)
+			count++
+			if count >= 200 { // Remove 200 oldest entries
+				break
+			}
+		}
+		fmt.Printf("🧹 [DEDUP] Cleaned up old message IDs, remaining: %d\n", len(processedMessageIds))
+	}
+
+	return false
 }
 
 func setCORSHeaders(h http.Event) {
@@ -300,6 +372,12 @@ func onPixelUpdate(e event.Event) uint32 {
 	fmt.Printf("✅ [onPixelUpdate] Successfully parsed batch: %d pixels, room='%s', timestamp=%d, batchId='%s'\n",
 		len(pixelBatch.Pixels), pixelBatch.Room, pixelBatch.Timestamp, pixelBatch.BatchId)
 
+	// Check for duplicate batch processing (server-side deduplication)
+	if isBatchProcessed(pixelBatch.BatchId, pixelBatch.Timestamp) {
+		fmt.Println("🚫 [onPixelUpdate] Duplicate batch detected, skipping processing")
+		return 0
+	}
+
 	// Use room from message
 	room := pixelBatch.Room
 	if room == "" {
@@ -432,10 +510,12 @@ func onChatMessages(e event.Event) uint32 {
 	fmt.Printf("📄 [onChatMessage] Raw data: %s\n", string(data))
 
 	var message struct {
-		Message  string `json:"message"`
-		UserID   string `json:"userId"`
-		Username string `json:"username"`
-		Room     string `json:"room"`
+		Message   string `json:"message"`
+		UserID    string `json:"userId"`
+		Username  string `json:"username"`
+		Room      string `json:"room"`
+		MessageID string `json:"messageId"`
+		Timestamp int64  `json:"timestamp"`
 	}
 
 	fmt.Println("🔍 [onChatMessage] Parsing chat message data")
@@ -445,8 +525,14 @@ func onChatMessages(e event.Event) uint32 {
 		return 1
 	}
 
-	fmt.Printf("✅ [onChatMessage] Successfully parsed message: user='%s', message='%s', room='%s'\n",
-		message.Username, message.Message, message.Room)
+	fmt.Printf("✅ [onChatMessage] Successfully parsed message: user='%s', message='%s', room='%s', messageId='%s', timestamp=%d\n",
+		message.Username, message.Message, message.Room, message.MessageID, message.Timestamp)
+
+	// Check for duplicate message processing (server-side deduplication)
+	if isMessageProcessed(message.MessageID, message.Timestamp) {
+		fmt.Println("🚫 [onChatMessage] Duplicate message detected, skipping processing")
+		return 0
+	}
 
 	// Use room from message
 	room := message.Room
@@ -484,9 +570,19 @@ func onChatMessages(e event.Event) uint32 {
 	}
 	fmt.Printf("📊 [onChatMessage] Loaded %d existing messages\n", len(messages))
 
-	// Add message with timestamp
-	messageId := fmt.Sprintf("%d", time.Now().UnixNano())
-	timestamp := time.Now().Unix()
+	// Use messageId and timestamp from frontend
+	messageId := message.MessageID
+	if messageId == "" {
+		messageId = fmt.Sprintf("%d", time.Now().UnixNano())
+		fmt.Printf("⚠️ [onChatMessage] No messageId from frontend, generated: %s\n", messageId)
+	}
+
+	timestamp := message.Timestamp
+	if timestamp == 0 {
+		timestamp = time.Now().Unix()
+		fmt.Printf("⚠️ [onChatMessage] No timestamp from frontend, generated: %d\n", timestamp)
+	}
+
 	chatMessage := ChatMessage{
 		ID:        messageId,
 		UserID:    message.UserID,
