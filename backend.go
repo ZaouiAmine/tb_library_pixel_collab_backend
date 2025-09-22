@@ -278,6 +278,134 @@ func getCanvas(e event.Event) uint32 {
 	return 0
 }
 
+//export clearCanvas
+func clearCanvas(e event.Event) uint32 {
+	fmt.Println("🗑️ [clearCanvas] ===== CLEAR CANVAS HANDLER TRIGGERED =====")
+	fmt.Printf("📊 [clearCanvas] Event type: %T\n", e)
+
+	h, err := e.HTTP()
+	if err != nil {
+		fmt.Printf("❌ [clearCanvas] Error getting HTTP event: %v\n", err)
+		return 1
+	}
+	setCORSHeaders(h)
+
+	// Get room parameter from query string
+	fmt.Println("🏠 [clearCanvas] Getting room parameter from query")
+	room, err := h.Query().Get("room")
+	if err != nil {
+		fmt.Printf("❌ [clearCanvas] Error getting room parameter: %v\n", err)
+		room = "default"
+	}
+	if room == "" {
+		room = "default"
+		fmt.Printf("⚠️ [clearCanvas] No room specified, using default room\n")
+	}
+	fmt.Printf("🏠 [clearCanvas] Clearing canvas for room: '%s'\n", room)
+
+	// Open canvas database
+	fmt.Println("💾 [clearCanvas] Opening canvas database")
+	db, err := database.New("/canvas")
+	if err != nil {
+		fmt.Printf("❌ [clearCanvas] Error opening canvas database: %v\n", err)
+		return fail(h, err, 500)
+	}
+	defer db.Close()
+	fmt.Println("✅ [clearCanvas] Canvas database opened successfully")
+
+	// Delete canvas data for the room
+	key := "room:" + room
+	fmt.Printf("🗑️ [clearCanvas] Deleting canvas data with key: '%s'\n", key)
+	err = db.Delete(key)
+	if err != nil {
+		fmt.Printf("❌ [clearCanvas] Error deleting canvas data: %v\n", err)
+		return fail(h, err, 500)
+	}
+	fmt.Printf("✅ [clearCanvas] Canvas data deleted successfully for room: '%s'\n", room)
+
+	// Return success response
+	response := map[string]interface{}{
+		"success": true,
+		"message": "Canvas cleared successfully",
+		"room":    room,
+	}
+
+	responseData, err := json.Marshal(response)
+	if err != nil {
+		fmt.Printf("❌ [clearCanvas] Error marshaling response: %v\n", err)
+		return fail(h, err, 500)
+	}
+
+	h.Write(responseData)
+	h.Return(200)
+	fmt.Println("🎉 [clearCanvas] ===== CLEAR CANVAS HANDLER COMPLETED =====")
+	return 0
+}
+
+//export clearChat
+func clearChat(e event.Event) uint32 {
+	fmt.Println("🗑️ [clearChat] ===== CLEAR CHAT HANDLER TRIGGERED =====")
+	fmt.Printf("📊 [clearChat] Event type: %T\n", e)
+
+	h, err := e.HTTP()
+	if err != nil {
+		fmt.Printf("❌ [clearChat] Error getting HTTP event: %v\n", err)
+		return 1
+	}
+	setCORSHeaders(h)
+
+	// Get room parameter from query string
+	fmt.Println("🏠 [clearChat] Getting room parameter from query")
+	room, err := h.Query().Get("room")
+	if err != nil {
+		fmt.Printf("❌ [clearChat] Error getting room parameter: %v\n", err)
+		room = "default"
+	}
+	if room == "" {
+		room = "default"
+		fmt.Printf("⚠️ [clearChat] No room specified, using default room\n")
+	}
+	fmt.Printf("🏠 [clearChat] Clearing chat for room: '%s'\n", room)
+
+	// Open chat database
+	fmt.Println("💾 [clearChat] Opening chat database")
+	db, err := database.New("/chat")
+	if err != nil {
+		fmt.Printf("❌ [clearChat] Error opening chat database: %v\n", err)
+		return fail(h, err, 500)
+	}
+	defer db.Close()
+	fmt.Println("✅ [clearChat] Chat database opened successfully")
+
+	// Delete chat data for the room
+	key := "room:" + room
+	fmt.Printf("🗑️ [clearChat] Deleting chat data with key: '%s'\n", key)
+	err = db.Delete(key)
+	if err != nil {
+		fmt.Printf("❌ [clearChat] Error deleting chat data: %v\n", err)
+		return fail(h, err, 500)
+	}
+	fmt.Printf("✅ [clearChat] Chat data deleted successfully for room: '%s'\n", room)
+
+	// Return success response
+	response := map[string]interface{}{
+		"success": true,
+		"message": "Chat cleared successfully",
+		"room":    room,
+	}
+
+	responseData, err := json.Marshal(response)
+	if err != nil {
+		fmt.Printf("❌ [clearChat] Error marshaling response: %v\n", err)
+		return fail(h, err, 500)
+	}
+
+	h.Write(responseData)
+	h.Return(200)
+	fmt.Println("🎉 [clearChat] ===== CLEAR CHAT HANDLER COMPLETED =====")
+	return 0
+}
+
 //export getMessages
 func getMessages(e event.Event) uint32 {
 	fmt.Println("💬 [getMessages] Starting chat messages request")
