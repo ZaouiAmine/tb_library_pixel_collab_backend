@@ -286,26 +286,20 @@ func clearCanvas(e event.Event) uint32 {
 	}
 	setCORSHeaders(h)
 
-	// Get room parameter
-	room, _ := h.Query().Get("room")
-	if room == "" {
-		room = "default"
-	}
-
-	// Delete canvas data
-	db, _ := database.New("/canvas")
-	defer db.Close()
-
-	key := "room:" + room
-	err = db.Delete(key)
-
+	// Delete all canvas data
+	db, err := database.New("/canvas")
 	if err != nil {
 		h.Write([]byte(fmt.Sprintf("Error: %v", err)))
 		h.Return(500)
 		return 1
 	}
+	defer db.Close()
 
-	h.Write([]byte(fmt.Sprintf("Canvas cleared for room: %s", room)))
+	// Delete both possible room keys
+	db.Delete("room:main")    // Frontend sends this
+	db.Delete("room:default") // Backend defaults to this
+
+	h.Write([]byte("Canvas cleared"))
 	h.Return(200)
 	return 0
 }
@@ -318,26 +312,20 @@ func clearChat(e event.Event) uint32 {
 	}
 	setCORSHeaders(h)
 
-	// Get room parameter
-	room, _ := h.Query().Get("room")
-	if room == "" {
-		room = "default"
-	}
-
-	// Delete chat data
-	db, _ := database.New("/chat")
-	defer db.Close()
-
-	key := "room:" + room
-	err = db.Delete(key)
-
+	// Delete all chat data
+	db, err := database.New("/chat")
 	if err != nil {
 		h.Write([]byte(fmt.Sprintf("Error: %v", err)))
 		h.Return(500)
 		return 1
 	}
+	defer db.Close()
 
-	h.Write([]byte(fmt.Sprintf("Chat cleared for room: %s", room)))
+	// Delete both possible room keys
+	db.Delete("room:main")    // Frontend sends this
+	db.Delete("room:default") // Backend defaults to this
+
+	h.Write([]byte("Chat cleared"))
 	h.Return(200)
 	return 0
 }
