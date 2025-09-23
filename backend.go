@@ -202,32 +202,54 @@ func getCanvas(e event.Event) uint32 {
 
 	// Open canvas database
 	db, err := database.New("/canvas")
-
 	if err != nil {
 		return fail(h, err, 500)
 	}
 
-	// Get canvas data for the room
-	canvasKey := "room:" + room
-	value, err := db.Get(canvasKey)
-	if err != nil {
-		// Return empty canvas if no data exists
-		emptyCanvas := make([][]string, CanvasHeight)
-		for y := 0; y < CanvasHeight; y++ {
-			emptyCanvas[y] = make([]string, CanvasWidth)
-			for x := 0; x < CanvasWidth; x++ {
-				emptyCanvas[y][x] = "#ffffff" // White pixels
-			}
+	// Create empty canvas
+	canvas := make([][]string, CanvasHeight)
+	for y := 0; y < CanvasHeight; y++ {
+		canvas[y] = make([]string, CanvasWidth)
+		for x := 0; x < CanvasWidth; x++ {
+			canvas[y][x] = "#ffffff" // White pixels
 		}
-		jsonData, _ := json.Marshal(emptyCanvas)
-		h.Headers().Set("Content-Type", "application/json")
-		h.Write(jsonData)
-		h.Return(200)
-		return 0
 	}
 
+	// List all keys for this room using CRDT pattern
+	roomPrefix := fmt.Sprintf("/%s/", room)
+	keys, err := db.List(roomPrefix)
+	if err == nil {
+		// Process each pixel key
+		for _, key := range keys {
+			// Parse key to get x,y coordinates
+			// Key format: /<room>/<x>:<y>
+			if len(key) > len(roomPrefix) {
+				coordPart := key[len(roomPrefix):]
+				var x, y int
+				if n, err := fmt.Sscanf(coordPart, "%d:%d", &x, &y); n == 2 && err == nil {
+					if x >= 0 && x < CanvasWidth && y >= 0 && y < CanvasHeight {
+						// Get pixel data
+						pixelData, err := db.Get(key)
+						if err == nil {
+							var pixel Pixel
+							if json.Unmarshal(pixelData, &pixel) == nil {
+								canvas[y][x] = pixel.Color
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// Return reconstructed canvas
+	jsonData, err := json.Marshal(canvas)
+	if err != nil {
+		return fail(h, err, 500)
+	}
+	
 	h.Headers().Set("Content-Type", "application/json")
-	h.Write(value)
+	h.Write(jsonData)
 	h.Return(200)
 	return 0
 }
@@ -240,20 +262,27 @@ func clearCanvas(e event.Event) uint32 {
 	}
 	setCORSHeaders(h)
 
-	// Delete canvas data using database ID
-	canvasDbId := uint32(0) // Canvas database ID
-	err = database.Database(canvasDbId).Delete("room:main")
+	// Get room from query parameter
+	room, err := h.Query().Get("room")
+	if err != nil {
+		room = "default"
+	}
+
+	// Delete canvas data using CRDT pattern
+	db, err := database.New("/canvas")
 	if err != nil {
 		h.Write([]byte(fmt.Sprintf("Error: %v", err)))
 		h.Return(500)
 		return 1
 	}
 
-	err = database.Database(canvasDbId).Delete("room:default")
-	if err != nil {
-		h.Write([]byte(fmt.Sprintf("Error: %v", err)))
-		h.Return(500)
-		return 1
+	// List all pixel keys for this room and delete them
+	roomPrefix := fmt.Sprintf("/%s/", room)
+	keys, err := db.List(roomPrefix)
+	if err == nil {
+		for _, key := range keys {
+			db.Delete(key)
+		}
 	}
 
 	h.Write([]byte("Canvas cleared"))
@@ -269,20 +298,27 @@ func clearChat(e event.Event) uint32 {
 	}
 	setCORSHeaders(h)
 
-	// Delete chat data using database ID
-	chatDbId := uint32(1) // Chat database ID
-	err = database.Database(chatDbId).Delete("room:main")
+	// Get room from query parameter
+	room, err := h.Query().Get("room")
+	if err != nil {
+		room = "default"
+	}
+
+	// Delete chat data using CRDT pattern
+	db, err := database.New("/chat")
 	if err != nil {
 		h.Write([]byte(fmt.Sprintf("Error: %v", err)))
 		h.Return(500)
 		return 1
 	}
 
-	err = database.Database(chatDbId).Delete("room:default")
-	if err != nil {
-		h.Write([]byte(fmt.Sprintf("Error: %v", err)))
-		h.Return(500)
-		return 1
+	// List all message keys for this room and delete them
+	roomPrefix := fmt.Sprintf("/%s/", room)
+	keys, err := db.List(roomPrefix)
+	if err == nil {
+		for _, key := range keys {
+			db.Delete(key)
+		}
 	}
 
 	h.Write([]byte("Chat cleared"))
@@ -311,8 +347,9 @@ func getMessages(e event.Event) uint32 {
 		return fail(h, err, 500)
 	}
 
-	chatKey := "room:" + room
-	data, err := db.Get(chatKey)
+	// List all message keys for this room using CRDT pattern
+	roomPrefix := fmt.Sprintf("/%s/", room)
+	keys, err := db.List(roomPrefix)
 	if err != nil {
 		// Return empty messages array if no data exists
 		jsonData, _ := json.Marshal([]ChatMessage{})
@@ -322,8 +359,49 @@ func getMessages(e event.Event) uint32 {
 		return 0
 	}
 
+	// Collect all messages
+	var messages []ChatMessage
+	for _, key := range keys {
+		// Parse key to get timestamp
+		// Key format: /<room>/<timestamp>
+		if len(key) > len(roomPrefix) {
+			timestampPart := key[len(roomPrefix):]
+			var timestamp int64
+			if n, err := fmt.Sscanf(timestampPart, "%d", &timestamp); n == 1 && err == nil {
+				// Get message data
+				messageData, err := db.Get(key)
+				if err == nil {
+					var message ChatMessage
+					if json.Unmarshal(messageData, &message) == nil {
+						messages = append(messages, message)
+					}
+				}
+			}
+		}
+	}
+
+	// Sort messages by timestamp (oldest first)
+	for i := 0; i < len(messages); i++ {
+		for j := i + 1; j < len(messages); j++ {
+			if messages[i].Timestamp > messages[j].Timestamp {
+				messages[i], messages[j] = messages[j], messages[i]
+			}
+		}
+	}
+
+	// Keep only last 100 messages
+	if len(messages) > 100 {
+		messages = messages[len(messages)-100:]
+	}
+
+	// Return reconstructed messages
+	jsonData, err := json.Marshal(messages)
+	if err != nil {
+		return fail(h, err, 500)
+	}
+	
 	h.Headers().Set("Content-Type", "application/json")
-	h.Write(data)
+	h.Write(jsonData)
 	h.Return(200)
 	return 0
 }
@@ -367,54 +445,36 @@ func onPixelUpdate(e event.Event) uint32 {
 		room = "default"
 	}
 
-	// Update canvas in database
+	// Update pixels in database using CRDT key pattern
 	db, err := database.New("/canvas")
 	if err != nil {
 		return 1
 	}
 
-	canvasKey := "room:" + room
-	canvasData, err := db.Get(canvasKey)
-	if err != nil {
-		// If no canvas exists, create empty canvas
-		canvas := make([][]string, CanvasHeight)
-		for y := 0; y < CanvasHeight; y++ {
-			canvas[y] = make([]string, CanvasWidth)
-			for x := 0; x < CanvasWidth; x++ {
-				canvas[y][x] = "#ffffff"
-			}
-		}
-		canvasData, _ = json.Marshal(canvas)
-		db.Put(canvasKey, canvasData)
-	} else {
-	}
-
-	var canvas [][]string
-	err = json.Unmarshal(canvasData, &canvas)
-	if err != nil {
-		return 1
-	}
-
-	// Process each pixel in the batch
+	// Process each pixel in the batch using CRDT key pattern
 	validPixels := []Pixel{}
 	for _, pixel := range pixelBatch.Pixels {
 		if pixel.X >= 0 && pixel.X < CanvasWidth &&
 			pixel.Y >= 0 && pixel.Y < CanvasHeight {
-			canvas[pixel.Y][pixel.X] = pixel.Color
+			
+			// Use CRDT key pattern: /<room>/<x>:<y>
+			pixelKey := fmt.Sprintf("/%s/%d:%d", room, pixel.X, pixel.Y)
+			
+			// Store pixel data as JSON
+			pixelData, err := json.Marshal(pixel)
+			if err != nil {
+				continue
+			}
+			
+			// Put pixel data in database
+			err = db.Put(pixelKey, pixelData)
+			if err != nil {
+				continue
+			}
+			
 			validPixels = append(validPixels, pixel)
 		}
 	}
-
-	// Save updated canvas if we have valid pixels
-	if len(validPixels) > 0 {
-		updatedData, err := json.Marshal(canvas)
-		if err != nil {
-			return 1
-		}
-		err = db.Put(canvasKey, updatedData)
-		if err != nil {
-			return 1
-		}
 
 		// Note: No broadcasting - frontend sends directly to pub/sub for real-time updates
 	} else {
@@ -462,23 +522,10 @@ func onChatMessages(e event.Event) uint32 {
 		room = "default"
 	}
 
-	// Update messages in database
+	// Update messages in database using CRDT key pattern
 	db, err := database.New("/chat")
 	if err != nil {
 		return 1
-	}
-
-	chatKey := "room:" + room
-	messagesData, err := db.Get(chatKey)
-	if err != nil {
-		messagesData = []byte("[]")
-	} else {
-	}
-
-	var messages []ChatMessage
-	err = json.Unmarshal(messagesData, &messages)
-	if err != nil {
-		messages = []ChatMessage{}
 	}
 
 	// Use messageId and timestamp from frontend
@@ -492,6 +539,9 @@ func onChatMessages(e event.Event) uint32 {
 		timestamp = time.Now().Unix()
 	}
 
+	// Use CRDT key pattern: /<room>/<timestamp>
+	chatKey := fmt.Sprintf("/%s/%d", room, timestamp)
+	
 	chatMessage := ChatMessage{
 		ID:        messageId,
 		UserID:    message.UserID,
@@ -499,19 +549,14 @@ func onChatMessages(e event.Event) uint32 {
 		Message:   message.Message,
 		Timestamp: timestamp,
 	}
-	messages = append(messages, chatMessage)
-
-	// Keep only last 100 messages
-	if len(messages) > 100 {
-		messages = messages[len(messages)-100:]
-	}
-
-	// Save updated messages
-	updatedData, err := json.Marshal(messages)
+	
+	// Store individual message using CRDT key pattern
+	messageData, err := json.Marshal(chatMessage)
 	if err != nil {
 		return 1
 	}
-	err = db.Put(chatKey, updatedData)
+	
+	err = db.Put(chatKey, messageData)
 	if err != nil {
 		return 1
 	}
