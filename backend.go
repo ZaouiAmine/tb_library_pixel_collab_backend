@@ -247,7 +247,7 @@ func getCanvas(e event.Event) uint32 {
 	if err != nil {
 		return fail(h, err, 500)
 	}
-	
+
 	h.Headers().Set("Content-Type", "application/json")
 	h.Write(jsonData)
 	h.Return(200)
@@ -399,7 +399,7 @@ func getMessages(e event.Event) uint32 {
 	if err != nil {
 		return fail(h, err, 500)
 	}
-	
+
 	h.Headers().Set("Content-Type", "application/json")
 	h.Write(jsonData)
 	h.Return(200)
@@ -456,28 +456,24 @@ func onPixelUpdate(e event.Event) uint32 {
 	for _, pixel := range pixelBatch.Pixels {
 		if pixel.X >= 0 && pixel.X < CanvasWidth &&
 			pixel.Y >= 0 && pixel.Y < CanvasHeight {
-			
+
 			// Use CRDT key pattern: /<room>/<x>:<y>
 			pixelKey := fmt.Sprintf("/%s/%d:%d", room, pixel.X, pixel.Y)
-			
+
 			// Store pixel data as JSON
 			pixelData, err := json.Marshal(pixel)
 			if err != nil {
 				continue
 			}
-			
+
 			// Put pixel data in database
 			err = db.Put(pixelKey, pixelData)
 			if err != nil {
 				continue
 			}
-			
+
 			validPixels = append(validPixels, pixel)
 		}
-	}
-
-		// Note: No broadcasting - frontend sends directly to pub/sub for real-time updates
-	} else {
 	}
 
 	return 0
@@ -541,7 +537,7 @@ func onChatMessages(e event.Event) uint32 {
 
 	// Use CRDT key pattern: /<room>/<timestamp>
 	chatKey := fmt.Sprintf("/%s/%d", room, timestamp)
-	
+
 	chatMessage := ChatMessage{
 		ID:        messageId,
 		UserID:    message.UserID,
@@ -549,13 +545,13 @@ func onChatMessages(e event.Event) uint32 {
 		Message:   message.Message,
 		Timestamp: timestamp,
 	}
-	
+
 	// Store individual message using CRDT key pattern
 	messageData, err := json.Marshal(chatMessage)
 	if err != nil {
 		return 1
 	}
-	
+
 	err = db.Put(chatKey, messageData)
 	if err != nil {
 		return 1
